@@ -11,6 +11,12 @@ test("charges the matching tier for mid-weight parcels", () => {
   assert.equal(shippingFeeCents(20), 25000);
 });
 
+test("adds an overweight fee per started kilogram above the heaviest tier", () => {
+  assert.equal(shippingFeeCents(20.5), 26000);
+  assert.equal(shippingFeeCents(23.5), 29000);
+  assert.equal(shippingFeeCents(25), 30000);
+});
+
 test("rejects invalid weights", () => {
   assert.throws(() => shippingFeeCents(0), RangeError);
   assert.throws(() => shippingFeeCents(Number.NaN), RangeError);
