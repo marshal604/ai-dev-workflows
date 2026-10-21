@@ -1,0 +1,45 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+# Cancel an in-flight review when a newer push arrives on the same PR
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Review PRs that Claude opens (auto-fixes), but skip Claude's follow-up pushes on a PR:
+    # re-reviewing its own fix on every push would mostly add noise
+    if: |
+      github.event.pull_request.draft == false &&
+      (github.actor != 'claude[bot]' || github.event.action == 'opened')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The built-in /code-review reads the diff from local git; the PR merge commit's
+          # first parent is the base branch, so depth 2 makes `git diff HEAD~1` the full PR diff
+          fetch-depth: 2
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # Subscription token from `claude setup-token` (Pro / Max / Team / Enterprise)
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The action rejects bot-triggered runs by default; auto-fix PRs are opened by claude[bot]
+          allowed_bots: claude
+          # Built-in /code-review skill (bundled with Claude Code), effort level "high"
+          # Its --comment flag does not post from CI, so the prompt asks for inline comments explicitly
+          prompt: |
+            /code-review high ${{ github.event.pull_request.number }}
+
+            After the review, post every finding as an inline comment on PR #${{ github.event.pull_request.number }} using the mcp__github_inline_comment__create_inline_comment tool, one comment per finding, on the line it concerns. If there are no findings, post nothing.
+          claude_args: '--allowedTools "Task,Read,Grep,Glob,mcp__github_inline_comment__create_inline_comment,Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr list:*),Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git fetch:*)"'
