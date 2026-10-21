@@ -38,7 +38,10 @@ export function orderTotalCents(
 
 export { UnknownSkuError };
 
-/** Validates cart lines before checkout. Quantities must be positive integers. */
+/**
+ * Validates cart lines before checkout. Quantities must be positive integers.
+ * @example validateCart([{ sku: "A1", quantity: 2 }]); // returns a copy of the lines
+ */
 export function validateCart(lines: readonly CartLine[]): CartLine[] {
   for (const line of lines) {
     if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
