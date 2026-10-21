@@ -11,10 +11,11 @@ Small TypeScript checkout service used to demo monitoring-driven auto-fixes.
 
 ## Fixing bugs and incidents
 
-- Reproduce first: add a failing test that captures the reported behavior, then fix the root cause.
-- Follow the behavior documented in doc comments; if the intended behavior is unclear, ask on the issue instead of guessing.
+- Scope: change only the behavior the issue describes. Doc comments tell you what correct behavior is; they do not authorize implementing other missing or broken behavior. Report anything else you notice instead of fixing it.
+- If an unrelated failing test or bug blocks verification, stop and report it as blocking. Do not repair it.
+- Reproduce first: make sure a test fails because of the reported behavior, then fix the root cause.
 - Never "fix" a crash by catching and ignoring the error.
-- Run `npm ci` once, then `npm test` and `npm run typecheck` before every commit. Do not push if either fails.
+- If the intended behavior is unclear, report that instead of guessing.
 
 ## Review guidelines
 

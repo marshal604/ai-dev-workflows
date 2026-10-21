@@ -5,7 +5,7 @@ export interface ShippingTier {
 
 export const DOMESTIC_TIERS: readonly ShippingTier[] = [
   { maxKg: 1, feeCents: 6000 },
-  { maxKg: 5, feeCents: 1200 },
+  { maxKg: 5, feeCents: 12000 },
   { maxKg: 20, feeCents: 25000 },
 ];
 
@@ -31,6 +31,14 @@ export function shippingFeeCents(
   if (!Number.isFinite(weightKg) || weightKg <= 0) {
     throw new RangeError(`Invalid parcel weight: ${weightKg}`);
   }
-  const tier = tiers[tierIndex(weightKg, tiers)];
-  return tier.feeCents;
+  if (tiers.length === 0) {
+    throw new RangeError("No shipping tiers configured");
+  }
+  const index = tierIndex(weightKg, tiers);
+  if (index < tiers.length) {
+    return tiers[index].feeCents;
+  }
+  const last = tiers[tiers.length - 1];
+  const startedKgOver = Math.ceil(weightKg - last.maxKg);
+  return last.feeCents + startedKgOver * OVERWEIGHT_FEE_CENTS_PER_KG;
 }
