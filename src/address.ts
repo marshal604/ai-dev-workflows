@@ -3,7 +3,10 @@ export function isValidPostalCode(code: string): boolean {
   return /^\d{3}(\d{2,3})?$/.test(code.trim());
 }
 
-/** Formats a postal code for display: digits only, no surrounding spaces. */
+/**
+ * Formats a postal code for display: digits only, no surrounding spaces.
+ * Example: formatPostalCode(" 100-01 ") // "10001"
+ */
 export function formatPostalCode(code: string): string {
   return code.replace(/[\s-]/g, "");
 }
