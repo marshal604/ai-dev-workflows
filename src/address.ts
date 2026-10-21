@@ -5,5 +5,5 @@ export function isValidPostalCode(code: string): boolean {
 
 /** Formats a postal code for display: digits only, no surrounding spaces. */
 export function formatPostalCode(code: string): string {
-  return code.trim();
+  return code.replace(/[\s-]/g, "");
 }
