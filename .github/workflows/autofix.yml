@@ -45,6 +45,19 @@ jobs:
           set -euo pipefail
           echo "issue=$ISSUE" >> "$GITHUB_OUTPUT"
 
+          # Runaway guard, not a usage cap: an issue that already ended MAX_ATTEMPTS Auto-fix runs needs a person
+          MAX_ATTEMPTS=3
+          attempts="$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" --paginate \
+            --jq '[.[] | select(.body | contains("<!-- autofix-outcome -->"))] | length' | awk '{s+=$1} END {print s+0}')"
+          if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
+            gh label create needs-human --repo "$GITHUB_REPOSITORY" --color 5319E7 --force >/dev/null
+            gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label needs-human >/dev/null
+            gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" \
+              --body "Auto-fix stopped: this issue already had $attempts Auto-fix attempts. A person needs to take it from here."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # An open PR blocks a new attempt, unless it no longer merges (main moved): then regenerate
           # GitHub computes mergeability lazily and reports UNKNOWN for a few seconds after main moves
           for _ in 1 2 3 4 5 6; do
@@ -79,6 +92,8 @@ jobs:
           )"
           if [ -n "$original" ]; then
             gh issue comment "$original" --repo "$GITHUB_REPOSITORY" --body "Seen again in #$ISSUE."
+            gh label create duplicate --repo "$GITHUB_REPOSITORY" --color CFD3D7 --force >/dev/null
+            gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label duplicate >/dev/null
             gh issue close "$ISSUE" --repo "$GITHUB_REPOSITORY" --reason "not planned" \
               --comment "Duplicate of #$original, which is already being handled."
             echo "proceed=false" >> "$GITHUB_OUTPUT"
@@ -98,8 +113,12 @@ jobs:
       pull-requests: read
     outputs:
       result: ${{ steps.verify.outputs.result }}
+      base: ${{ steps.base.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
+      # Publish applies the verified patch onto this exact commit, even if main moves meanwhile
+      - id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v6
         with:
           node-version: 22
@@ -186,7 +205,15 @@ jobs:
             finish verify_failed "Tests also pass without the fix, so no test proves the bug."
           fi
           git reset -q --hard HEAD && git apply "$out/fix.patch"
-          { echo "Changed files: $(tr '\n' ' ' <<<"$changed")"; echo "Tests on the original code with the new tests: fail (expected)"; echo "Tests and typecheck with the fix: pass"; } > "$out/verify.txt"
+          # Changing an existing test can weaken it; the reviewer must check those edits
+          modified_tests="$(git diff --name-only --diff-filter=M HEAD -- '*.test.ts' | tr '\n' ' ')"
+          {
+            echo "Changed files: $(tr '\n' ' ' <<<"$changed")"
+            echo "Tests on the original code with the new tests: fail (expected)"
+            echo "Tests and typecheck with the fix: pass"
+            [ -n "$modified_tests" ] && echo "Existing tests modified (review these): $modified_tests"
+          } > "$out/verify.txt"
+          [ -n "$modified_tests" ] && touch "$out/tests-modified"
           echo "result=verified" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
@@ -214,6 +241,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           token: ${{ steps.app.outputs.token }}
+          ref: ${{ needs.fix.outputs.base }}
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           name: autofix
@@ -234,6 +263,13 @@ jobs:
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
           title="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title --jq .title)"
           branch="autofix/issue-$ISSUE"
+          # Never overwrite commits a person pushed to an old Auto-fix branch: use a fresh branch instead
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+            export BOT="${APP_SLUG}[bot]"
+            others="$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$branch" \
+              --jq '[.commits[] | (.author.login // .commit.author.name)] | map(select(. != env.BOT)) | length' 2>/dev/null || echo 1)"
+            [ "${others:-1}" != "0" ] && branch="autofix/issue-$ISSUE-$GITHUB_RUN_ID"
+          fi
           git checkout -b "$branch"
           git add -A
           git commit -q -m "fix: $title (#$ISSUE)"
@@ -248,6 +284,10 @@ jobs:
           [ -z "$url" ] && url="$(gh pr create --repo "$GITHUB_REPOSITORY" --draft --base main --head "$branch" \
             --title "fix: $title (#$ISSUE)" --body-file "$DIR/body.md")"
           echo "url=$url" >> "$GITHUB_OUTPUT"
+          if [ -f "$DIR/tests-modified" ]; then
+            gh label create tests-modified --repo "$GITHUB_REPOSITORY" --color D93F0B --force >/dev/null
+            gh pr edit "$url" --repo "$GITHUB_REPOSITORY" --add-label tests-modified >/dev/null
+          fi
 
           # Two signals for one root cause can race past the agent's duplicate check; flag file overlap.
           # (if/then, not `[[ ]] &&`: a false test ending the loop would fail the pipeline under set -e)
@@ -264,10 +304,11 @@ jobs:
               --body "This PR changes the same files as $overlap. Check whether they fix the same root cause before merging either."
           fi
 
-  # Every run that got past triage ends with exactly one outcome comment and label on the issue
+  # Every run that got past triage, or whose triage broke, ends with one outcome comment and label.
+  # Runs that never start (platform outage, cancelled queue) still need an outside check.
   report:
     needs: [triage, fix, publish]
-    if: always() && needs.triage.outputs.proceed == 'true'
+    if: always() && (needs.triage.outputs.proceed == 'true' || needs.triage.result == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -281,7 +322,8 @@ jobs:
       - name: Comment the outcome
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE: ${{ needs.triage.outputs.issue }}
+          ISSUE: ${{ needs.triage.outputs.issue || inputs.issue || github.event.issue.number }}
+          TRIAGE_JOB: ${{ needs.triage.result }}
           RESULT: ${{ needs.fix.outputs.result }}
           FIX_JOB: ${{ needs.fix.result }}
           PUBLISH_JOB: ${{ needs.publish.result }}
@@ -305,11 +347,21 @@ jobs:
             unreproduced|blocked)
               label=needs-human; body="Auto-fix stopped ($RESULT): $(field .blocker)"$'\n\n'"Root cause notes: $(field .root_cause)" ;;
             verify_failed)
-              label=autofix-failed; body="Auto-fix rejected its own change: $detail"$'\n\n'"Run: $RUN_URL" ;;
+              label=autofix-failed; failed=true; body="Auto-fix rejected its own change: $detail"$'\n\n'"Run: $RUN_URL" ;;
             *)
-              label=autofix-failed; failed=true; body="Auto-fix did not finish (fix job: $FIX_JOB). $detail Run: $RUN_URL" ;;
+              label=autofix-failed; failed=true
+              if [ "$TRIAGE_JOB" = "failure" ]; then
+                body="Auto-fix could not start (triage failed). Run: $RUN_URL"
+              else
+                body="Auto-fix did not finish (fix job: $FIX_JOB). $detail Run: $RUN_URL"
+              fi ;;
           esac
+          # One current outcome label: drop the ones a previous attempt left behind
+          for old in autofix-pr autofix-failed needs-human; do
+            [ "$old" != "$label" ] && gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --remove-label "$old" >/dev/null 2>&1
+          done
           gh label create "$label" --repo "$GITHUB_REPOSITORY" --color 5319E7 --force >/dev/null
           gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label "$label" >/dev/null
-          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$body"
+          # The marker counts attempts for the runaway guard in triage
+          gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$body"$'\n\n<!-- autofix-outcome -->'
           [ "$failed" = "false" ]

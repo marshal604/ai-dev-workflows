@@ -6,6 +6,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Required check for merge queues, if the repository uses one
+  merge_group:
 
 jobs:
   test:
