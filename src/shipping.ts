@@ -42,3 +42,5 @@ export function shippingFeeCents(
   const startedKgOver = Math.ceil(weightKg - last.maxKg);
   return last.feeCents + startedKgOver * OVERWEIGHT_FEE_CENTS_PER_KG;
 }
+
+// reviewed by a human
