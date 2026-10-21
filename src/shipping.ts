@@ -10,7 +10,7 @@ export const DOMESTIC_TIERS: readonly ShippingTier[] = [
 ];
 
 /** Extra charge per started kilogram above the heaviest tier. */
-export const OVERWEIGHT_FEE_CENTS_PER_KG = 100;
+export const OVERWEIGHT_FEE_CENTS_PER_KG = 1000;
 
 function tierIndex(weightKg: number, tiers: readonly ShippingTier[]): number {
   let index = 0;
@@ -35,7 +35,7 @@ export function shippingFeeCents(
     throw new RangeError("No shipping tiers configured");
   }
   const index = tierIndex(weightKg, tiers);
-  if (index <= tiers.length) {
+  if (index < tiers.length) {
     return tiers[index].feeCents;
   }
   const last = tiers[tiers.length - 1];
