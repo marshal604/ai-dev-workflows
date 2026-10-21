@@ -5,7 +5,7 @@ export interface ShippingTier {
 
 export const DOMESTIC_TIERS: readonly ShippingTier[] = [
   { maxKg: 1, feeCents: 6000 },
-  { maxKg: 5, feeCents: 1200 },
+  { maxKg: 5, feeCents: 12000 },
   { maxKg: 20, feeCents: 25000 },
 ];
 
