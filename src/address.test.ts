@@ -7,6 +7,10 @@ test("accepts 3 and 5 digit postal codes", () => {
   assert.equal(isValidPostalCode("10048"), true);
 });
 
+test("accepts 6 digit postal codes", () => {
+  assert.equal(isValidPostalCode("100001"), true);
+});
+
 test("rejects malformed postal codes", () => {
   assert.equal(isValidPostalCode("12"), false);
   assert.equal(isValidPostalCode("abcde"), false);
