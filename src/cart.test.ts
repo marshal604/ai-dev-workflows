@@ -6,6 +6,11 @@ test("sums catalog prices by quantity", () => {
   assert.equal(subtotalCents([{ sku: "MANGO-1KG", quantity: 2 }, { sku: "LYCHEE-1KG", quantity: 1 }]), 128000);
 });
 
+test("applies discounts to merchandise only, not shipping", () => {
+  const discount = { code: "SUMMER10", percentOff: 10 };
+  assert.equal(orderTotalCents([{ sku: "MANGO-3KG", quantity: 1 }], 3, discount), 120000);
+});
+
 test("adds shipping to the merchandise total", () => {
   assert.equal(orderTotalCents([{ sku: "MANGO-3KG", quantity: 1 }], 3), 132000);
 });

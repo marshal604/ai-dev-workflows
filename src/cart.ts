@@ -31,9 +31,8 @@ export function orderTotalCents(
 ): number {
   const merchandise = subtotalCents(lines);
   const shipping = shippingFeeCents(weightKg);
-  const gross = merchandise + shipping;
-  const off = discount ? Math.round((gross * discount.percentOff) / 100) : 0;
-  return gross - off;
+  const off = discount ? Math.round((merchandise * discount.percentOff) / 100) : 0;
+  return merchandise - off + shipping;
 }
 
 export { UnknownSkuError };
