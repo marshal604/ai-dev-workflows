@@ -13,3 +13,10 @@ test("throws UnknownSkuError for a SKU that is not in the catalog", () => {
 test("adds shipping to the merchandise total", () => {
   assert.equal(orderTotalCents([{ sku: "MANGO-3KG", quantity: 1 }], 3), 132000);
 });
+
+test("discount applies to merchandise only, not shipping", () => {
+  assert.equal(
+    orderTotalCents([{ sku: "MANGO-3KG", quantity: 1 }], 3, { code: "SUMMER10", percentOff: 10 }),
+    120000,
+  );
+});
