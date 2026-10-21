@@ -68,11 +68,11 @@ jobs:
   fix:
     needs: intake
     if: needs.intake.outputs.is_new == 'true'
+    # The agent job is read-only; publishing uses the Auto-fix GitHub App's own token
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       issues: write
-      id-token: write
+      pull-requests: read
     uses: ./.github/workflows/autofix.yml
     with:
       issue: ${{ fromJSON(needs.intake.outputs.issue) }}
