@@ -1,6 +1,6 @@
-// Reproduces a production error locally and prints a repository_dispatch payload for it, in the
-// same shape a monitoring webhook would send. Usage:
-//   node scripts/simulate-incident.ts [weightKg] | gh api repos/<owner>/<repo>/dispatches --input -
+// Reproduces a production error locally and prints the GitHub "create issue" request a monitor
+// would send for it. Usage:
+//   node scripts/simulate-incident.ts [weightKg] | gh api repos/<owner>/<repo>/issues --input -
 import { createHash } from "node:crypto";
 import { shippingFeeCents } from "../src/shipping.ts";
 
@@ -24,16 +24,19 @@ try {
     .digest("hex")
     .slice(0, 12);
 
+  const body = [
+    "**Source:** `simulator`",
+    "",
+    `Checkout failed while quoting shipping for a ${weightKg} kg parcel.`,
+    "",
+    "```",
+    stack,
+    "```",
+    "",
+    `<!-- incident-fingerprint: ${fingerprint} -->`,
+  ].join("\n");
+
   process.stdout.write(
-    JSON.stringify({
-      event_type: "incident",
-      client_payload: {
-        source: "simulator",
-        title: `${err.name}: ${err.message}`,
-        details: `Checkout failed while quoting shipping for a ${weightKg} kg parcel.`,
-        stack,
-        fingerprint,
-      },
-    }),
+    JSON.stringify({ title: `${err.name}: ${err.message}`, body, labels: ["incident"] }),
   );
 }

@@ -1,0 +1,24 @@
+name: Incident
+description: A production bug with evidence. A maintainer adds the `incident` label to let Claude auto-fix it.
+title: "<ErrorType>: <message>"
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The user-facing symptom and the input that triggered it.
+      placeholder: Checkout failed while quoting shipping for a 23.5 kg parcel.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Stack trace or logs
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Optional. Point to the doc comment, spec or ticket that defines the correct result.

@@ -1,0 +1,79 @@
+name: CI Incident
+
+# Internal monitoring source: when CI fails on main, open one `incident` issue per broken workflow
+# and hand it to Auto-fix. External monitors open issues through the GitHub API instead.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: ci-incident
+  cancel-in-progress: false
+
+jobs:
+  intake:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      actions: read
+    outputs:
+      issue: ${{ steps.upsert.outputs.issue }}
+      is_new: ${{ steps.upsert.outputs.is_new }}
+    steps:
+      - name: Open a new issue or record a repeat
+        id: upsert
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          fingerprint="ci-$(printf '%s' "$RUN_NAME" | tr -c 'a-zA-Z0-9' '-')"
+          marker="<!-- incident-fingerprint: $fingerprint -->"
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --label incident --state open --limit 200 \
+            --json number,body --jq "map(select(.body | contains(\"$marker\"))) | .[0].number // empty")"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "Failed again at $RUN_SHA: $RUN_URL"
+            echo "issue=$existing" >> "$GITHUB_OUTPUT"
+            echo "is_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "**Source:** \`ci\`"
+            echo
+            echo "The $RUN_NAME workflow failed on main at $RUN_SHA: $RUN_URL"
+            echo
+            echo '```'
+            gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>&1 | tail -n 80 | cut -c1-300 || true
+            echo '```'
+            echo
+            echo "$marker"
+          } > "$RUNNER_TEMP/body.md"
+
+          gh label create incident --repo "$GITHUB_REPOSITORY" --color B60205 \
+            --description "Bug for Claude to auto-fix" --force >/dev/null
+          url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "CI failing on main: $RUN_NAME" \
+            --body-file "$RUNNER_TEMP/body.md" --label incident)"
+          echo "issue=${url##*/}" >> "$GITHUB_OUTPUT"
+          echo "is_new=true" >> "$GITHUB_OUTPUT"
+
+  fix:
+    needs: intake
+    if: needs.intake.outputs.is_new == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: ./.github/workflows/autofix.yml
+    with:
+      issue: ${{ fromJSON(needs.intake.outputs.issue) }}
+    secrets: inherit
