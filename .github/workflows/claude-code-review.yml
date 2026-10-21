@@ -11,11 +11,11 @@ concurrency:
 
 jobs:
   review:
-    # Review PRs that Claude opens (auto-fixes), but skip Claude's follow-up pushes on a PR:
-    # re-reviewing its own fix on every push would mostly add noise
+    # Auto-fix opens draft PRs from autofix/* branches: review those too. Skip follow-up pushes made
+    # by bots (e.g. @claude edits on a PR): re-reviewing an agent's own change mostly adds noise.
     if: |
-      github.event.pull_request.draft == false &&
-      (github.actor != 'claude[bot]' || github.event.action == 'opened')
+      (github.event.pull_request.draft == false || startsWith(github.head_ref, 'autofix/')) &&
+      !(endsWith(github.actor, '[bot]') && github.event.action == 'synchronize')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -34,8 +34,8 @@ jobs:
         with:
           # Subscription token from `claude setup-token` (Pro / Max / Team / Enterprise)
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # The action rejects bot-triggered runs by default; auto-fix PRs are opened by claude[bot]
-          allowed_bots: claude
+          # The action rejects bot-triggered runs by default; Auto-fix PRs are opened by its own App
+          allowed_bots: marshal604-autofix
           # Built-in /code-review skill (bundled with Claude Code), effort level "high"
           # Its --comment flag does not post from CI, so the prompt asks for inline comments explicitly
           prompt: |
