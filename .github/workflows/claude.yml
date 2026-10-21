@@ -8,14 +8,16 @@ on:
   pull_request_review_comment:
     types: [created]
 
-# One @claude run at a time per issue / PR, so two requests never push over each other
-concurrency:
-  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
   claude:
     if: contains(github.event.comment.body, '@claude')
+    # One @claude run at a time per issue / PR, so two requests never push over each other.
+    # Job level, not workflow level: every comment (including Claude's own progress comment)
+    # starts a run, and GitHub keeps only one pending run per group, so a workflow-level group
+    # let those runs replace a queued @claude request. Skipped jobs never join a job-level group.
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

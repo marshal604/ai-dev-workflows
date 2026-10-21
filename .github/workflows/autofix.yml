@@ -51,6 +51,7 @@ jobs:
             --jq '[.[] | select(.body | contains("<!-- autofix-outcome -->"))] | length' | awk '{s+=$1} END {print s+0}')"
           if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
             gh label create needs-human --repo "$GITHUB_REPOSITORY" --color 5319E7 --force >/dev/null
+            gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --remove-label autofix-pr --remove-label autofix-failed >/dev/null 2>&1 || true
             gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label needs-human >/dev/null
             gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" \
               --body "Auto-fix stopped: this issue already had $attempts Auto-fix attempts. A person needs to take it from here."
