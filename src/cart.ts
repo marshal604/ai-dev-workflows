@@ -17,7 +17,13 @@ export function subtotalCents(
   lines: readonly CartLine[],
   catalog: ReadonlyMap<string, Product> = CATALOG,
 ): number {
-  return lines.reduce((sum, line) => sum + catalog.get(line.sku)!.priceCents * line.quantity, 0);
+  return lines.reduce((sum, line) => {
+    const product = catalog.get(line.sku);
+    if (!product) {
+      throw new UnknownSkuError(line.sku);
+    }
+    return sum + product.priceCents * line.quantity;
+  }, 0);
 }
 
 /**
