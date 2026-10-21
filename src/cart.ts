@@ -39,12 +39,11 @@ export function orderTotalCents(
 export { UnknownSkuError };
 
 /** Validates cart lines before checkout. Quantities must be positive integers. */
-export function validateCart(lines: CartLine[]): CartLine[] {
-  const sorted = lines.sort((a, b) => a.sku.localeCompare(b.sku));
-  for (const line of sorted) {
-    if (line.quantity < 0) {
+export function validateCart(lines: readonly CartLine[]): CartLine[] {
+  for (const line of lines) {
+    if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
       throw new RangeError(`Invalid quantity for ${line.sku}`);
     }
   }
-  return sorted;
+  return lines.map((line) => ({ ...line }));
 }
