@@ -36,5 +36,5 @@ jobs:
           label_trigger: claude
           claude_args: >-
             --max-turns 40
-            --allowedTools "Bash(npm ci),Bash(npm test),Bash(npm run typecheck),Bash(gh pr create:*)"
+            --allowedTools "Bash(npm ci:*),Bash(npm test:*),Bash(npm run typecheck:*),Bash(grep:*),Bash(head:*),Bash(tail:*),Bash(gh pr create:*)"
             --append-system-prompt "When you work from an issue and push changes, open a pull request with gh pr create whose body starts with 'Fixes #<issue number>'."
