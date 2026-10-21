@@ -2,52 +2,119 @@
 
 **English** | [繁體中文](README.zh-TW.md)
 
-AI-assisted development workflows on GitHub Actions, verified end to end:
+Drop-in GitHub Actions workflows for AI-assisted development, verified end to end on this repo:
 
-- **AI code review** on every PR, plus `@claude` to apply fixes on request.
-- **Auto-fix**: an issue (from a monitor, a failing CI run on `main`, or a person) becomes a verified **draft PR**, reviewed by AI and gated by CI, with a human deciding what merges. The agent only investigates and edits files; the workflow verifies, publishes and reports.
+- **AI code review** on every PR, and `@claude` comments that apply fixes.
+- **Auto-fix**: an issue labeled `incident` or `claude` (opened by a person, a monitor, or failing CI on `main`) becomes a verified **draft PR**. The agent edits with a read-only token; the workflow verifies the change, publishes it with its own GitHub App, and reports the outcome on the issue.
+- **Branch protection** keeps every merge with a human: PR required, CI green, one approval.
 
-`main` is protected: every change needs a PR, a green CI run and a human approval, so nothing an agent produces can merge on its own.
+To adopt this in another repository, follow **Adopt in a repository** below step by step. Read [docs/how-it-works.md](docs/how-it-works.md) for the design and its limits, and [docs/troubleshooting.md](docs/troubleshooting.md) when a step does not produce its expected result.
 
-## Flow
+## What is in this repo
 
-1. **Trigger**: an issue gets the `incident` label (a bug, e.g. opened by a monitor through the GitHub API) or the `claude` label (any request). `ci-incident.yml` opens an `incident` issue when CI fails on `main`. Adding the label is the human go-ahead.
-2. **Triage** (`autofix.yml`): duplicates of an open incident are closed; an issue that already has an open Auto-fix PR is skipped, unless that PR conflicts with `main`, in which case it is closed and regenerated.
-3. **Agent**: Claude runs with a **read-only token**, reads the issue and its comments, fixes only what the issue describes, and returns a structured result (`fixed`, `unreproduced`, `blocked`, `duplicate`) with the root cause and anything else it noticed but did not change.
-4. **Verify**: the workflow rejects changes outside `src/`, requires the tests to **fail on the original code and pass with the fix**, and runs typecheck. The agent's claims are never trusted.
-5. **Publish**: a separate job uses this repo's own GitHub App token to push `autofix/issue-N` and open a **draft PR**. Pushes made with it trigger CI and AI review. A PR touching the same files as another Auto-fix PR is labeled `possible-duplicate`.
-6. **Report**: every outcome ends with one comment and one label on the issue (`autofix-pr`, `needs-human`, `autofix-failed`). Nothing fails silently.
+| Path | Role |
+|------|------|
+| `.github/workflows/claude-code-review.yml` | AI review on PR open / update, inline comments |
+| `.github/workflows/claude.yml` | `@claude` in an issue or PR comment: conversational changes, pushes to the PR branch |
+| `.github/workflows/autofix.yml` | Auto-fix: triage → agent (read-only) → verify → publish draft PR → report |
+| `.github/workflows/ci-incident.yml` | Opens an `incident` issue when CI fails on `main` and calls `autofix.yml` |
+| `.github/workflows/ci.yml` | The project's CI; the required check and the safety net for every agent change |
+| `.github/ISSUE_TEMPLATE/incident.yml` | Issue form for bug reports Auto-fix can work from |
+| `CLAUDE.md` | **Template**: the sample project's conventions that review and fixes follow. Rewrite it for each project |
+| `src/`, `scripts/simulate-incident.ts` | Sample TypeScript app and a script that turns a real error into an `incident` issue |
 
-Separately, `claude-code-review.yml` reviews every PR (including Auto-fix drafts) with Claude Code's built-in `/code-review high`, and `claude.yml` lets people ask `@claude` for changes on any issue or PR.
+## Adopt in a repository
 
-## Workflows
+Work through the steps in order. Each step ends with a check; do not start the next step until it passes.
 
-| File | Trigger | Purpose |
-|------|---------|---------|
-| `autofix.yml` | `incident` / `claude` label, or called by `ci-incident.yml` | Triage, agent, verify, publish, report |
-| `ci-incident.yml` | CI fails on `main` | Opens one `incident` issue per broken workflow and calls Auto-fix |
-| `claude-code-review.yml` | PR opened / updated | AI review as inline comments |
-| `claude.yml` | `@claude` in a comment | Conversational changes on issues and PRs |
-| `ci.yml` | PRs and `main` | Typecheck and tests; the safety net for every agent change |
+### 1. Copy the files
 
-## Code review
+Copy `.github/workflows/`, `.github/ISSUE_TEMPLATE/incident.yml` and `CLAUDE.md` into the target repository.
 
-`claude-code-review.yml` runs Claude Code's built-in `/code-review high` and posts findings as inline PR comments. On the same PR with 4 planted bugs it found 4 of 4 (plus a race condition), while the official `code-review` plugin found 1 of 4 and sometimes ended after 8 seconds with no comments, because the model skipped the plugin's multi-agent pipeline in CI. The built-in review leans toward recall and occasionally posts a speculative finding. A green review check means the review ran, not that the PR is approved.
+**Done when** all five workflow files and the issue form exist in the target repository.
 
-## Setup
+### 2. Adapt the files to the project
 
-1. Install the [Claude GitHub App](https://github.com/apps/claude) and store `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) as a repository secret.
-2. Create your own GitHub App with Contents, Issues and Pull requests set to read and write, and install it on the repository.
-3. Store its Client ID as the variable `AUTOFIX_APP_CLIENT_ID` and its private key as the secret `AUTOFIX_APP_PRIVATE_KEY`:
+Change exactly these places; everything else is project-independent.
+
+| File | Key | Change it to |
+|------|-----|--------------|
+| `ci.yml` | `jobs.test.steps` | The project's install, build, lint and test commands. Keep the job id `test` (branch protection requires it) or update step 5 to the new id |
+| `ci-incident.yml` | `on.workflow_run.workflows: [CI]` | The `name:` of the project's CI workflow |
+| `autofix.yml` | `jobs.fix.steps`: `setup-node` and `npm ci` | The project's toolchain setup and install command |
+| `autofix.yml` | `--allowedTools` in `jobs.fix` | Replace `npm test` / `npm run typecheck` / `node --test` with the project's test and type-check commands |
+| `autofix.yml` | `Verify the change` step | `grep -vE '^src/'`: the directories the agent may change. `\.test\.ts$`: the test file pattern. `npm test` / `npm run typecheck`: the project's commands |
+| `autofix.yml` | prompt in `jobs.fix` | `Fix the root cause in src/` and the `npm` commands: same paths and commands as above |
+| `claude.yml` | `--allowedTools` | The project's test and lint commands, so `@claude` can verify its own changes |
+| `claude-code-review.yml` | `allowed_bots` | The slug of the GitHub App created in step 3 |
+| `CLAUDE.md` | whole file | The project's conventions, scoped precisely (a broad rule produces false-positive review comments). Keep the "Fixing bugs and incidents" section: it is the scope rule Auto-fix depends on |
+
+**Done when** every row above is either changed or confirmed correct for the project, and `ci.yml` passes on a branch of the target repository.
+
+### 3. Create the GitHub Apps and credentials
+
+1. Install the **Claude GitHub App** on the repository: https://github.com/apps/claude
+2. Create the **Auto-fix GitHub App** (it publishes draft PRs; pushes made with it trigger CI, unlike `GITHUB_TOKEN`). This URL pre-fills it; change `name` to something unique:
+   `https://github.com/settings/apps/new?name=<org>-autofix&url=<repo url>&public=false&webhook_active=false&contents=write&issues=write&pull_requests=write`
+   For an organization, use `https://github.com/organizations/<org>/settings/apps/new?...` with the same parameters.
+3. On the App page, note the **Client ID**, generate a **private key** (`.pem`), and install the App on the target repository only.
+4. Store the credentials:
    ```bash
    gh variable set AUTOFIX_APP_CLIENT_ID --repo <owner>/<repo> --body "<client id>"
    gh secret set AUTOFIX_APP_PRIVATE_KEY --repo <owner>/<repo> < path/to/key.pem
+   gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <owner>/<repo>   # run in your own terminal; value from `claude setup-token`
    ```
-4. Put the App's name in `allowed_bots` in `claude-code-review.yml`.
+   For a team, replace the personal OAuth token with a Claude Console API key: set the secret `ANTHROPIC_API_KEY`, and in `claude.yml`, `claude-code-review.yml` and `autofix.yml` replace `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` with `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}`; in `autofix.yml` also rename the `workflow_call` secret `CLAUDE_CODE_OAUTH_TOKEN` to `ANTHROPIC_API_KEY`.
+
+**Done when** `gh variable list` shows `AUTOFIX_APP_CLIENT_ID`, `gh secret list` shows the private key and the Claude credential, and both Apps list the repository under their installations.
+
+### 4. Create the labels
+
+```bash
+gh label create incident --repo <owner>/<repo> --color B60205 --description "Bug for Auto-fix"
+gh label create claude --repo <owner>/<repo> --color 7057FF --description "Hand this issue to Auto-fix"
+```
+
+Adding either label to an issue is the go-ahead for Auto-fix. Only people with triage access or above can add labels; decide who that is.
+
+**Done when** both labels exist.
+
+### 5. Protect `main`
+
+```bash
+gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input - <<'EOF'
+{
+  "required_status_checks": {"strict": false, "checks": [{"context": "test"}]},
+  "enforce_admins": false,
+  "required_pull_request_reviews": {"dismiss_stale_reviews": true, "required_approving_review_count": 1, "require_last_push_approval": true},
+  "restrictions": null,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+EOF
+```
+
+Use the CI job id from step 2 as the `context`. Do not add either App to a bypass list.
+
+**Done when** `gh api repos/<owner>/<repo>/branches/main/protection` shows the required check, one required approval and `require_last_push_approval: true`.
+
+### 6. Verify end to end
+
+Run each check on the target repository and compare with the expected result.
+
+| Check | How | Expected |
+|-------|-----|----------|
+| AI review | Open a PR with a small deliberate bug | Inline review comments within a few minutes |
+| `@claude` | Comment `@claude fix the review comments` on that PR | Claude pushes a commit; CI runs on it |
+| Auto-fix | Open an issue describing a reproducible bug (stack trace or failing input), then add the `incident` label | A draft PR opened by the Auto-fix App within a few minutes; an `autofix-pr` label and a comment on the issue; CI and review run on the PR |
+| Unclear request | Open a vague issue ("make shipping cheaper"), add `claude` | No PR; a `needs-human` label and a comment listing what needs deciding |
+| Merge gate | Try to merge the draft PR without an approval | Refused by branch protection |
+
+**Done when** every row matches. If one does not, find the symptom in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Connecting a monitor
 
-A monitor opens an issue through the GitHub API with a token that only has Issues write access:
+A monitor opens an `incident` issue through the GitHub API, using a token with only Issues write access:
 
 ```bash
 curl -X POST https://api.github.com/repos/<owner>/<repo>/issues \
@@ -55,28 +122,11 @@ curl -X POST https://api.github.com/repos/<owner>/<repo>/issues \
   -d '{"title":"TypeError: ...","body":"What happened, stack trace\n\n<!-- incident-fingerprint: <stable id> -->","labels":["incident"]}'
 ```
 
-The optional fingerprint comment groups repeats of the same error. `scripts/simulate-incident.ts` reproduces a real error locally and prints exactly this request. Free option: PostHog error tracking can send webhooks on its free plan; Sentry's free plan only sends email alerts.
+The fingerprint comment groups repeats of the same error into one issue. `scripts/simulate-incident.ts` builds exactly this request from a real error. Connect a monitor only after the execution-environment hardening listed in [docs/how-it-works.md](docs/how-it-works.md#limits).
 
-## Pitfalls found while testing
+## Day-to-day operation
 
-| Symptom | Cause | Fix (applied here) |
-|---------|-------|--------------------|
-| Run "succeeded" with no PR and no comment | The agent ran git itself; `git checkout -q -b` did not match the allowlist prefix and it gave up | The agent no longer runs git; the workflow publishes and always reports |
-| The agent implemented things the issue did not ask for | A `CLAUDE.md` rule said to follow doc comments | Scope rule: change only what the issue describes, report the rest |
-| PR claimed tests failed before the fix when they were never run | Test results were self-reported | The workflow runs the tests itself |
-| The agent could not see the issue body | `gh issue view --comments` prints comments only | `gh issue view N --json title,body,comments` |
-| Duplicate-PR check never matched | `gh pr list --search "head:autofix/"` does no prefix match | The workflow lists open Auto-fix PRs into the prompt |
-| Publish failed after the PR was created | A `[[ ]] &&` loop ended the step under `set -euo pipefail` | `if ... then ... fi` |
-| Later steps cannot use the Claude App token | claude-code-action revokes it when the action ends | Publish with this repo's own GitHub App |
-| Built-in `/code-review` finds nothing | It reads the diff from local git; `fetch-depth: 1` leaves no base to compare | `fetch-depth: 2` in the review checkout |
-| Review findings appear only in the log | The built-in skill's `--comment` does not post from CI | The prompt asks for `mcp__github_inline_comment__create_inline_comment`, listed in `--allowedTools` |
-| Commits pushed by `@claude` do not trigger CI | `actions/checkout@v6+` keeps `GITHUB_TOKEN` where the action cannot replace it (claude-code-action#1721) | `claude.yml` pins `checkout@v5`; do not use `persist-credentials: false` (breaks `@claude` on private repos, #1711) |
-| A second `@claude` request silently disappears | A workflow-level concurrency group let Claude's own progress comment replace the queued request | Concurrency at job level, so skipped runs never join the queue |
-| `@claude` pushed its fix but the run shows failure | `--max-turns` too low | `--max-turns 40` |
-| No CI on a PR at all | GitHub does not run `pull_request` workflows while the PR has merge conflicts | Resolve the conflict first |
-
-## Known limits
-
-- The same bug reported by two sources at nearly the same time can produce two PRs; the second is labeled `possible-duplicate`.
-- Verification needs tests that can prove a fix; with low coverage the agent reports `blocked` more often.
-- Tested on a small TypeScript project with up to about 7 concurrent agent runs.
+- An `incident` / `claude` label starts Auto-fix; the outcome lands on the issue as one comment plus one label: `autofix-pr`, `needs-human` or `autofix-failed`.
+- Check `needs-human` and `autofix-failed` issues daily. To retry after answering a question in the comments, remove and re-add the label.
+- Each issue gets at most 3 Auto-fix attempts; after that it stays with a person.
+- To stop everything: `gh workflow disable autofix.yml` (likewise `ci-incident.yml`, `claude.yml`), then cancel running runs. Uninstalling the Auto-fix App or deleting its private key stops all publishing at once.
