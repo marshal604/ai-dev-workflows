@@ -31,6 +31,14 @@ export function shippingFeeCents(
   if (!Number.isFinite(weightKg) || weightKg <= 0) {
     throw new RangeError(`Invalid parcel weight: ${weightKg}`);
   }
-  const tier = tiers[tierIndex(weightKg, tiers)];
-  return tier.feeCents;
+  const index = tierIndex(weightKg, tiers);
+  if (index < tiers.length) {
+    return tiers[index].feeCents;
+  }
+  const last = tiers[tiers.length - 1];
+  if (last === undefined) {
+    throw new RangeError("No shipping tiers configured");
+  }
+  const startedKgOver = Math.ceil(weightKg - last.maxKg);
+  return last.feeCents + startedKgOver * OVERWEIGHT_FEE_CENTS_PER_KG;
 }
