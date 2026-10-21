@@ -12,6 +12,9 @@ export interface Discount {
   percentOff: number;
 }
 
+/** Orders whose merchandise subtotal after discount reaches this amount ship free. */
+export const FREE_SHIPPING_THRESHOLD_CENTS = 100000;
+
 /** Merchandise subtotal. Throws UnknownSkuError for SKUs that are not in the catalog. */
 export function subtotalCents(
   lines: readonly CartLine[],
@@ -30,7 +33,10 @@ export function orderTotalCents(
   discount?: Discount,
 ): number {
   const merchandise = subtotalCents(lines);
-  const shipping = shippingFeeCents(weightKg);
+  const discountedMerchandise =
+    merchandise - (discount ? Math.round((merchandise * discount.percentOff) / 100) : 0);
+  const shipping =
+    discountedMerchandise >= FREE_SHIPPING_THRESHOLD_CENTS ? 0 : shippingFeeCents(weightKg);
   const gross = merchandise + shipping;
   const off = discount ? Math.round((gross * discount.percentOff) / 100) : 0;
   return gross - off;
