@@ -249,12 +249,14 @@ jobs:
             --title "fix: $title (#$ISSUE)" --body-file "$DIR/body.md")"
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
-          # Two signals for one root cause can race past the agent's duplicate check; flag file overlap
+          # Two signals for one root cause can race past the agent's duplicate check; flag file overlap.
+          # (if/then, not `[[ ]] &&`: a false test ending the loop would fail the pipeline under set -e)
           mine="$(git diff --name-only HEAD~1 HEAD)"
           export BRANCH="$branch"
           overlap="$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,headRefName,files \
             --jq '[.[] | select((.headRefName | startswith("autofix/")) and .headRefName != env.BRANCH)] | .[] | "\(.number) \([.files[].path] | join(" "))"' \
-            | while read -r num files; do for f in $mine; do [[ " $files " == *" $f "* ]] && { echo "#$num"; break; }; done; done | sort -u | tr '\n' ' ')"
+            | while read -r num files; do for f in $mine; do if [[ " $files " == *" $f "* ]]; then echo "#$num"; break; fi; done; done \
+            | sort -u | tr '\n' ' ')"
           if [ -n "$overlap" ]; then
             gh label create possible-duplicate --repo "$GITHUB_REPOSITORY" --color FBCA04 --force >/dev/null
             gh pr edit "$url" --repo "$GITHUB_REPOSITORY" --add-label possible-duplicate >/dev/null
