@@ -63,7 +63,9 @@ Change exactly these places; everything else is project-independent.
    gh variable set AUTOFIX_APP_CLIENT_ID --repo <owner>/<repo> --body "<client id>"
    gh secret set AUTOFIX_APP_PRIVATE_KEY --repo <owner>/<repo> < path/to/key.pem
    gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <owner>/<repo>   # run in your own terminal; value from `claude setup-token`
+   gh variable set AUTOFIX_REVIEWERS --repo <owner>/<repo> --body "<user or org/team>"   # who reviews Auto-fix PRs
    ```
+   Draft PRs get no automatic review request (CODEOWNERS included), so `AUTOFIX_REVIEWERS` is how an Auto-fix PR gets an owner. A team (`org/team`) also needs the Auto-fix App's **Organization > Members: read** permission.
    For a team, replace the personal OAuth token with a Claude Console API key: set the secret `ANTHROPIC_API_KEY`, and in `claude.yml`, `claude-code-review.yml` and `autofix.yml` replace `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` with `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}`; in `autofix.yml` also rename the `workflow_call` secret `CLAUDE_CODE_OAUTH_TOKEN` to `ANTHROPIC_API_KEY`.
 
 **Done when** `gh variable list` shows `AUTOFIX_APP_CLIENT_ID`, `gh secret list` shows the private key and the Claude credential, and both Apps list the repository under their installations.
@@ -131,11 +133,16 @@ Two optional layers, so the channel shows what happened and pings people only wh
 | Event | Slack | Who acts |
 |---|---|---|
 | New incident | One card (GitHub app) | Auto-fix starts by itself |
-| Duplicate, repeat failure, label change, `@claude` progress | Nothing | The workflow |
-| Draft PR opened | "Review needed" with root cause and PR link | A person reviews and merges |
-| `needs-human` / `autofix-failed` | Message with `SLACK_MENTION` | A person |
+| Repeat of an open incident, deduplicated before an issue is created | Nothing | The monitor relay or `ci-incident.yml` |
+| Duplicate issue that Auto-fix closes after creation | Its card, plus a "closed" reply the app may also post to the channel | Nobody; dedupe upstream to avoid it |
+| Draft PR opened | "Review needed" with root cause and PR link | `AUTOFIX_REVIEWERS` |
+| Incident blocked, unreproduced or rejected by verification | Message with `SLACK_MENTION` | The duty owner |
+| `claude` request blocked | Nothing; GitHub notifies the requester | The requester |
+| Auto-fix itself failed (triage, publish, timeout, quota) | Message with `SLACK_TOOLING_MENTION` | Whoever maintains these workflows |
+| CI green again on main | "Closed" reply on the CI issue's card | Nobody; the issue closes itself |
+| Label change, `@claude` progress, PR already open | Nothing | |
 
-Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
+Messages name `owner/repo#N`, so several repositories can share a channel; set the secret and variables at organization level (`gh secret set --org`, `gh variable set --org`). Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
 
 1. **Awareness (GitHub app).** Install the GitHub app in Slack, then in the channel:
    ```
@@ -147,15 +154,25 @@ Outages, payments, auth, security and data loss still go to the monitor's own al
 2. **Action needed (workflow).** Create a Slack app at https://api.slack.com/apps, turn on Incoming Webhooks, add a webhook for the channel, then:
    ```bash
    gh secret set SLACK_WEBHOOK_URL --repo <owner>/<repo>      # paste the webhook URL when prompted
-   gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!here>'   # or '<!subteam^GROUP_ID>' for an on-call group
+   gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!subteam^GROUP_ID>'   # the duty group; '<!here>' for a small team
+   gh variable set SLACK_TOOLING_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'   # the workflow maintainer
    ```
-   Without the secret the step is skipped.
+   Without the secret the step is skipped. A message that cannot be delivered after retries turns the run red.
 
 **Done when** a test incident shows one card, and its outcome posts "Review needed" (or a mention for `needs-human`).
 
 ## Day-to-day operation
 
+Team rules to agree on before the pilot:
+
+- **One duty owner per week.** Point `AUTOFIX_REVIEWERS` and `SLACK_MENTION` at them (or their team). They own every "Review needed" and "Needs a person" message, and acknowledge one by assigning themselves to the issue or PR.
+- **One daily queue check** by the duty owner: [unassigned issues that need a person](../../issues?q=is%3Aopen+label%3Aneeds-human%2Cautofix-failed+no%3Aassignee) and [open Auto-fix PRs](../../pulls?q=is%3Aopen+head%3Aautofix%2F). Slack is the nudge; this queue is the record.
+- **Broken main: revert first.** Revert the culprit PR to restore main; an Auto-fix PR is the follow-up, not the mitigation.
+
+Mechanics:
+
 - An `incident` / `claude` label starts Auto-fix; the outcome lands on the issue as one comment plus one label: `autofix-pr`, `needs-human` or `autofix-failed`.
-- Check `needs-human` and `autofix-failed` issues daily. To retry after answering a question in the comments, remove and re-add the label.
+- To retry after answering a question in the comments, remove and re-add the `incident` / `claude` label (not `needs-human`).
+- A CI issue closes itself when CI is green again on the current main, so the next break opens a fresh issue.
 - Each issue gets at most 3 Auto-fix attempts; after that it stays with a person.
 - To stop everything: `gh workflow disable autofix.yml` (likewise `ci-incident.yml`, `claude.yml`), then cancel running runs. Uninstalling the Auto-fix App or deleting its private key stops all publishing at once.

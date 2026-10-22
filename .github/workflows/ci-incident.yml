@@ -65,6 +65,32 @@ jobs:
           echo "issue=${url##*/}" >> "$GITHUB_OUTPUT"
           echo "is_new=true" >> "$GITHUB_OUTPUT"
 
+  # A green run on the current main ends the failure episode. Without this, an issue left open after a
+  # manual fix would swallow the next, unrelated break as a "Failed again" comment.
+  resolve:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Close the open CI issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          # A green run for an older commit says nothing about the current main
+          [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$RUN_SHA" ] || exit 0
+          fingerprint="ci-$(printf '%s' "$RUN_NAME" | tr -c 'a-zA-Z0-9' '-')"
+          marker="<!-- incident-fingerprint: $fingerprint -->"
+          for n in $(gh issue list --repo "$GITHUB_REPOSITORY" --label incident --state open --limit 200 \
+            --json number,body --jq "map(select(.body | contains(\"$marker\"))) | .[].number"); do
+            gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "CI is green again on main at $RUN_SHA: $RUN_URL"
+          done
+
   fix:
     needs: intake
     if: needs.intake.outputs.is_new == 'true'

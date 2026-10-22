@@ -63,7 +63,9 @@
    gh variable set AUTOFIX_APP_CLIENT_ID --repo <owner>/<repo> --body "<client id>"
    gh secret set AUTOFIX_APP_PRIVATE_KEY --repo <owner>/<repo> < path/to/key.pem
    gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <owner>/<repo>   # 在自己的終端機執行；值來自 `claude setup-token`
+   gh variable set AUTOFIX_REVIEWERS --repo <owner>/<repo> --body "<帳號或 org/team>"   # 誰負責 review Auto-fix 的 PR
    ```
+   draft PR 不會自動要求 review（CODEOWNERS 也一樣），所以要靠 `AUTOFIX_REVIEWERS` 讓 Auto-fix 的 PR 有負責人。指定 team（`org/team`）時，Auto-fix App 還需要 **Organization > Members: read** 權限。
    團隊使用時，把個人 OAuth token 換成 Claude Console 的 API key：設定 secret `ANTHROPIC_API_KEY`；在 `claude.yml`、`claude-code-review.yml`、`autofix.yml` 把 `claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}` 換成 `anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}`；`autofix.yml` 的 `workflow_call` secret `CLAUDE_CODE_OAUTH_TOKEN` 也要改名為 `ANTHROPIC_API_KEY`。
 
 **完成條件**：`gh variable list` 有 `AUTOFIX_APP_CLIENT_ID`，`gh secret list` 有 private key 和 Claude 憑證，兩個 App 的安裝清單裡都有這個 repo。
@@ -131,11 +133,16 @@ fingerprint 註解用來標記同一個錯誤的重複告警。讓監控（或�
 | 事件 | Slack | 誰處理 |
 |---|---|---|
 | 新的 incident | 一張卡片（GitHub app） | Auto-fix 自動開始 |
-| 重複、再次失敗、標籤變動、`@claude` 進度 | 不顯示 | workflow |
-| 開出 draft PR | 「Review needed」附根因和 PR 連結 | 人 review 後 merge |
-| `needs-human` / `autofix-failed` | 帶 `SLACK_MENTION` 的訊息 | 人 |
+| 已開立的 incident 又發生，在開 issue 前就去重 | 不顯示 | 監控轉接服務或 `ci-incident.yml` |
+| 開立後才被 Auto-fix 判定重複並關閉的 issue | 它的卡片，加上一則關閉回覆（app 可能也發到頻道） | 無；在上游去重就能避免 |
+| 開出 draft PR | 「Review needed」附根因和 PR 連結 | `AUTOFIX_REVIEWERS` |
+| incident 被擋住、無法重現或沒通過驗證 | 帶 `SLACK_MENTION` 的訊息 | 值班的人 |
+| `claude` 需求被擋住 | 不顯示；GitHub 會通知提出的人 | 提出的人 |
+| Auto-fix 本身失敗（triage、發佈、逾時、額度） | 帶 `SLACK_TOOLING_MENTION` 的訊息 | 維護這套 workflow 的人 |
+| main 的 CI 恢復綠燈 | CI issue 卡片下的「已關閉」回覆 | 無；issue 會自動關閉 |
+| 標籤變動、`@claude` 進度、已經有 PR | 不顯示 | |
 
-服務中斷、金流、登入、資安和資料遺失，仍然走監控本身的告警和 on-call；Auto-fix 是並行的，不是取代。
+訊息會寫出 `owner/repo#N`，所以多個 repo 可以共用一個頻道；secret 和變數可以設在 org 層級（`gh secret set --org`、`gh variable set --org`）。服務中斷、金流、登入、資安和資料遺失，仍然走監控本身的告警和 on-call；Auto-fix 是並行的，不是取代。
 
 1. **知道發生了什麼（GitHub app）**：在 Slack 安裝 GitHub app，然後在頻道裡：
    ```
@@ -147,15 +154,25 @@ fingerprint 註解用來標記同一個錯誤的重複告警。讓監控（或�
 2. **需要人處理（workflow）**：到 https://api.slack.com/apps 建一個 Slack app，開啟 Incoming Webhooks，替頻道新增 webhook，然後：
    ```bash
    gh secret set SLACK_WEBHOOK_URL --repo <owner>/<repo>      # 依提示貼上 webhook URL
-   gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!here>'   # 或用 '<!subteam^GROUP_ID>' tag 值班群組
+   gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!subteam^GROUP_ID>'   # 值班群組；小團隊可用 '<!here>'
+   gh variable set SLACK_TOOLING_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'   # 維護 workflow 的人
    ```
-   沒有設定這個 secret 時，這一步會自動跳過。
+   沒有設定這個 secret 時，這一步會自動跳過。重試後仍送不出去，run 會變紅。
 
 **完成條件**：測試 incident 在頻道出現一張卡片，處理結果發出「Review needed」（或 `needs-human` 時 tag 人）。
 
 ## 日常運作
 
+試點前要先跟團隊說好的規則：
+
+- **每週一位值班的人。** 把 `AUTOFIX_REVIEWERS` 和 `SLACK_MENTION` 指向他（或他的 team）。「Review needed」和「Needs a person」都由他負責；把自己指派到 issue 或 PR 上，就代表已經接手。
+- **值班的人每天看一次待處理清單**：[需要人處理且還沒人接的 issue](../../issues?q=is%3Aopen+label%3Aneeds-human%2Cautofix-failed+no%3Aassignee) 和 [還開著的 Auto-fix PR](../../pulls?q=is%3Aopen+head%3Aautofix%2F)。Slack 只是提醒，這份清單才是紀錄。
+- **main 壞了先 revert。** 先 revert 出問題的 PR 讓 main 恢復；Auto-fix 的 PR 是後續的根治，不是止血手段。
+
+運作方式：
+
 - 貼上 `incident` / `claude` 標籤就會啟動 Auto-fix；結果會在 issue 上留一則留言加一個標籤：`autofix-pr`、`needs-human` 或 `autofix-failed`。
-- 每天看一次 `needs-human` 和 `autofix-failed` 的 issue。在留言回答問題後要重試，把標籤拿掉再貼回去。
+- 在留言回答問題後要重試，把 `incident` / `claude` 標籤拿掉再貼回去（不是 `needs-human`）。
+- main 的 CI 在目前的 HEAD 恢復綠燈時，CI issue 會自動關閉，下次壞掉會開新的 issue。
 - 每個 issue 最多自動嘗試 3 次，之後由人接手。
 - 全部停用：`gh workflow disable autofix.yml`（`ci-incident.yml`、`claude.yml` 同理），再取消執行中的 run。移除 Auto-fix App 的安裝或刪除它的 private key，會立刻停止所有自動交付。

@@ -255,6 +255,7 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           ISSUE: ${{ needs.triage.outputs.issue }}
           APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          AUTOFIX_REVIEWERS: ${{ vars.AUTOFIX_REVIEWERS }}
           DIR: ${{ runner.temp }}/autofix
         run: |
           set -euo pipefail
@@ -285,6 +286,11 @@ jobs:
           [ -z "$url" ] && url="$(gh pr create --repo "$GITHUB_REPOSITORY" --draft --base main --head "$branch" \
             --title "fix: $title (#$ISSUE)" --body-file "$DIR/body.md")"
           echo "url=$url" >> "$GITHUB_OUTPUT"
+          # Draft PRs get no automatic review request (CODEOWNERS included), so name the owner explicitly
+          if [ -n "$AUTOFIX_REVIEWERS" ]; then
+            gh pr edit "$url" --repo "$GITHUB_REPOSITORY" --add-reviewer "$AUTOFIX_REVIEWERS" >/dev/null \
+              || echo "::warning::Could not request review from $AUTOFIX_REVIEWERS"
+          fi
           if [ -f "$DIR/tests-modified" ]; then
             gh label create tests-modified --repo "$GITHUB_REPOSITORY" --color D93F0B --force >/dev/null
             gh pr edit "$url" --repo "$GITHUB_REPOSITORY" --add-label tests-modified >/dev/null
@@ -321,6 +327,7 @@ jobs:
           name: autofix
           path: ${{ runner.temp }}/autofix
       - name: Comment the outcome
+        id: outcome
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE: ${{ needs.triage.outputs.issue || inputs.issue || github.event.issue.number }}
@@ -331,34 +338,40 @@ jobs:
           PR_URL: ${{ needs.publish.outputs.pr }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DIR: ${{ runner.temp }}/autofix
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_MENTION: ${{ vars.SLACK_MENTION }}
         run: |
           set -uo pipefail
           field() { jq -r "$1 // empty" "$DIR/outcome.json" 2>/dev/null || true; }
           detail="$(cat "$DIR/verify.txt" 2>/dev/null || true)"
           failed=false
+          # notify: who Slack should reach. review = the PR reviewers, person = on-call for incidents,
+          # tooling = whoever maintains this workflow, none = nobody (the outcome comment is enough)
           case "$RESULT" in
             verified)
               if [ "$PUBLISH_JOB" = "success" ] && [ -n "$PR_URL" ]; then
-                label=autofix-pr; body="Auto-fix opened a draft PR: $PR_URL"$'\n\n'"Root cause: $(field .root_cause)"
+                label=autofix-pr; notify=review; body="Auto-fix opened a draft PR: $PR_URL"$'\n\n'"Root cause: $(field .root_cause)"
               else
-                label=autofix-failed; failed=true; body="Auto-fix verified a change but could not publish it. Run: $RUN_URL"
+                label=autofix-failed; notify=tooling; failed=true; body="Auto-fix verified a change but could not publish it. Run: $RUN_URL"
               fi ;;
             duplicate)
-              label=needs-human; body="Auto-fix found an open PR for the same root cause: #$(field .duplicate_of). $(field .root_cause)" ;;
+              label=needs-human; notify=none; body="Auto-fix found an open PR for the same root cause: #$(field .duplicate_of). $(field .root_cause)" ;;
             unreproduced|blocked)
-              label=needs-human; body="Auto-fix stopped ($RESULT): $(field .blocker)"$'\n\n'"Root cause notes: $(field .root_cause)" ;;
+              label=needs-human; notify=person; body="Auto-fix stopped ($RESULT): $(field .blocker)"$'\n\n'"Root cause notes: $(field .root_cause)" ;;
             verify_failed)
-              label=autofix-failed; failed=true; body="Auto-fix rejected its own change: $detail"$'\n\n'"Run: $RUN_URL" ;;
+              label=autofix-failed; notify=person; failed=true; body="Auto-fix rejected its own change: $detail"$'\n\n'"Run: $RUN_URL" ;;
             *)
-              label=autofix-failed; failed=true
+              label=autofix-failed; notify=tooling; failed=true
               if [ "$TRIAGE_JOB" = "failure" ]; then
                 body="Auto-fix could not start (triage failed). Run: $RUN_URL"
               else
                 body="Auto-fix did not finish (fix job: $FIX_JOB). $detail Run: $RUN_URL"
               fi ;;
           esac
+          # Written before any API call, so the Slack step still knows the outcome if reporting fails
+          {
+            echo "label=$label"
+            echo "notify=$notify"
+            echo "summary=$(printf '%s' "$body" | head -n 1)"
+          } >> "$GITHUB_OUTPUT"
           # One current outcome label: drop the ones a previous attempt left behind
           for old in autofix-pr autofix-failed needs-human; do
             [ "$old" != "$label" ] && gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --remove-label "$old" >/dev/null 2>&1
@@ -367,19 +380,47 @@ jobs:
           gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label "$label" >/dev/null
           # The marker counts attempts for the runaway guard in triage
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$body"$'\n\n<!-- autofix-outcome -->'
-          # Slack gets only the outcomes a person must act on. Optional: skipped when the secret is unset.
-          # ponytail: the runaway guard in triage does not notify; a person re-labeled the issue, so one is already on it
-          if [ -n "$SLACK_WEBHOOK_URL" ]; then
-            esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-            title="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title --jq .title | esc)"
-            link="<$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|#$ISSUE $title>"
-            if [ "$label" = "autofix-pr" ]; then
-              text="Review needed: <$PR_URL|draft PR> for $link"$'\n'"Root cause: $(field .root_cause | esc)"
-            else
-              text="${SLACK_MENTION:+$SLACK_MENTION }Needs a person ($label): $link"$'\n'"$(printf '%s' "$body" | head -n 1 | esc)"
-            fi
-            jq -n --arg text "$text" '{text: $text}' \
-              | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null \
-              || echo "::warning::Slack notification failed"
-          fi
           [ "$failed" = "false" ]
+
+      # Slack gets only outcomes a person must act on. Optional: skipped when the secret is unset.
+      # ponytail: the runaway guard in triage does not notify; a person re-labeled the issue, so one is already on it
+      - name: Notify Slack
+        if: always() && steps.outcome.outputs.notify != '' && steps.outcome.outputs.notify != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ needs.triage.outputs.issue || inputs.issue || github.event.issue.number }}
+          NOTIFY: ${{ steps.outcome.outputs.notify }}
+          LABEL: ${{ steps.outcome.outputs.label }}
+          SUMMARY: ${{ steps.outcome.outputs.summary }}
+          PR_URL: ${{ needs.publish.outputs.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DIR: ${{ runner.temp }}/autofix
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MENTION: ${{ vars.SLACK_MENTION }}
+          SLACK_TOOLING_MENTION: ${{ vars.SLACK_TOOLING_MENTION }}
+        run: |
+          set -uo pipefail
+          [ -n "$SLACK_WEBHOOK_URL" ] || exit 0
+          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+          info="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,labels 2>/dev/null || true)"
+          title="$(printf '%s' "$info" | jq -r '.title // empty' 2>/dev/null | esc)"
+          # A blocked `claude` request belongs to its requester, who GitHub already notifies.
+          # Unknown labels (the lookup failed) count as an incident: better one extra ping than a silent miss.
+          if [ "$NOTIFY" = "person" ] && [ -n "$info" ] \
+            && ! printf '%s' "$info" | jq -e '[.labels[].name] | index("incident")' >/dev/null; then
+            exit 0
+          fi
+          link="<$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE${title:+ $title}>"
+          case "$NOTIFY" in
+            review)
+              root="$(jq -r '.root_cause // empty' "$DIR/outcome.json" 2>/dev/null | esc)"
+              text="Review needed: <$PR_URL|draft PR> for $link"$'\n'"Root cause: ${root:-see the PR}" ;;
+            person)
+              text="${SLACK_MENTION:+$SLACK_MENTION }Needs a person ($LABEL): $link"$'\n'"$(printf '%s' "$SUMMARY" | esc)" ;;
+            tooling)
+              text="${SLACK_TOOLING_MENTION:+$SLACK_TOOLING_MENTION }Auto-fix itself failed on $link"$'\n'"<$RUN_URL|Run log>" ;;
+          esac
+          # curl --retry covers timeouts, 429 (honouring Retry-After) and 5xx; a lost message turns this step red
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -fsS --max-time 15 --retry 3 -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null \
+            || { echo "::error::Slack notification failed"; exit 1; }
