@@ -124,42 +124,36 @@ curl -X POST https://api.github.com/repos/<owner>/<repo>/issues \
   -d '{"title":"TypeError: ...","body":"What happened, stack trace\n\n<!-- incident-fingerprint: <stable id> -->","labels":["incident"]}'
 ```
 
-The fingerprint comment marks repeats of the same error. Have the monitor (or the small relay that turns its webhook into this request) first look for an open issue with the same fingerprint and comment on it instead, as `ci-incident.yml` does; otherwise every repeat opens an issue, and a Slack card, that Auto-fix then closes as a duplicate. `scripts/simulate-incident.ts` builds exactly this request from a real error. Connect a monitor only after the execution-environment hardening listed in [docs/how-it-works.md](docs/how-it-works.md#limits).
+The fingerprint comment marks repeats of the same error. Have the monitor (or the small relay that turns its webhook into this request) first look for an open issue with the same fingerprint and comment on it instead, as `ci-incident.yml` does; otherwise every repeat opens an issue and starts an Auto-fix run that only closes it as a duplicate. `scripts/simulate-incident.ts` builds exactly this request from a real error. Connect a monitor only after the execution-environment hardening listed in [docs/how-it-works.md](docs/how-it-works.md#limits).
 
 ## Slack notifications
 
-Two optional layers, so the channel shows what happened and pings people only when they must act:
+The workflows post to one Slack channel through an Incoming Webhook, and only at the moments that matter: a new incident, and the points where a person must act. Everything else stays on GitHub.
 
 | Event | Slack | Who acts |
 |---|---|---|
-| New incident | One card (GitHub app) | Auto-fix starts by itself |
-| Repeat of an open incident, deduplicated before an issue is created | Nothing | The monitor relay or `ci-incident.yml` |
-| Duplicate issue that Auto-fix closes after creation | Its card, plus a "closed" reply the app may also post to the channel | Nobody; dedupe upstream to avoid it |
-| Draft PR opened | "Review needed" with root cause and PR link | `AUTOFIX_REVIEWERS` |
-| Incident blocked, unreproduced or rejected by verification | Message with `SLACK_MENTION` | The duty owner |
-| `claude` request blocked | Nothing; GitHub notifies the requester | The requester |
-| Auto-fix itself failed (triage, publish, timeout, quota) | Message with `SLACK_TOOLING_MENTION` | Whoever maintains these workflows |
-| CI green again on main | "Closed" reply on the CI issue's card | Nobody; the issue closes itself |
-| Label change, `@claude` progress, PR already open | Nothing | |
+| New incident, after deduplication, first attempt only | "New incident" with source | Auto-fix starts by itself |
+| Repeat or duplicate of an open incident | Nothing | The workflow comments on the original |
+| Draft PR opened | `SLACK_REVIEW_MENTION` "Review needed" with root cause and PR link | `AUTOFIX_REVIEWERS` |
+| Incident blocked, unreproduced or rejected by verification | `SLACK_MENTION` "Needs a person" with the reason | The duty owner |
+| `claude` request (opened or blocked) | Nothing; GitHub notifies the requester | The requester |
+| Auto-fix itself failed (triage, publish, timeout, quota) | `SLACK_TOOLING_MENTION` "Auto-fix itself failed" with the run log | Whoever maintains these workflows |
+| Closures, retries, label changes, `@claude` progress | Nothing | |
 
 Messages name `owner/repo#N`, so several repositories can share a channel; set the secret and variables at organization level (`gh secret set --org`, `gh variable set --org`). Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
 
-1. **Awareness (GitHub app).** Install the GitHub app in Slack, then in the channel:
-   ```
-   /invite @GitHub
-   /github subscribe <owner>/<repo> issues +label:"incident"
-   /github unsubscribe <owner>/<repo> pulls commits releases deployments
-   ```
-   The first command asks to install the GitHub-side "Slack" App if missing; give it access to this repository. Leave the `comments` feature off: it would post every `@claude` progress comment and discussion.
-2. **Action needed (workflow).** Create a Slack app at https://api.slack.com/apps, turn on Incoming Webhooks, add a webhook for the channel, then:
-   ```bash
-   gh secret set SLACK_WEBHOOK_URL --repo <owner>/<repo>      # paste the webhook URL when prompted
-   gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!subteam^GROUP_ID>'   # the duty group; '<!here>' for a small team
-   gh variable set SLACK_TOOLING_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'   # the workflow maintainer
-   ```
-   Without the secret the step is skipped. A message that cannot be delivered after retries turns the run red.
+Setup: create a Slack app at https://api.slack.com/apps (Blank app, bot scope `incoming-webhook`, no events), turn on **Incoming Webhooks**, add a webhook for the channel, then:
+```bash
+gh secret set SLACK_WEBHOOK_URL --repo <owner>/<repo>    # run in your own terminal and paste the URL; never paste it into a chat
+gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!subteam^GROUP_ID>'          # duty group (paid Slack), or '<@MEMBER_ID>'
+gh variable set SLACK_REVIEW_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'          # usually the duty owner too
+gh variable set SLACK_TOOLING_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'         # the workflow maintainer
+```
+A member ID comes from Slack: profile, **...**, **Copy member ID**. Unset mentions post without a ping; without the secret nothing is posted. A message that cannot be delivered after retries turns the outcome run red; a failed "New incident" post never blocks the fix.
 
-**Done when** a test incident shows one card, and its outcome posts "Review needed" (or a mention for `needs-human`).
+GitHub's own Slack app (`/github subscribe`) is not needed and is noisier: it posts a card for every labelled issue, duplicates included, and posts closures to the channel as well as the thread.
+
+**Done when** a test incident posts "New incident", then "Review needed" (or "Needs a person"), and a `claude` request posts nothing.
 
 ## Day-to-day operation
 

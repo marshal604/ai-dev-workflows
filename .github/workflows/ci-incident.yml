@@ -46,14 +46,27 @@ jobs:
             exit 0
           fi
 
+          # Drop the job/step columns, timestamps, BOM and colour codes, so the issue (and its Slack card) leads
+          # with the failing lines instead of runner noise
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>&1 | cut -f3- \
+            | sed -E -e $'s/^\xEF\xBB\xBF//' -e 's/^[0-9T:.-]+Z ?//' -e $'s/\x1b\\[[0-9;]*m//g' | cut -c1-300 \
+            > "$RUNNER_TEMP/log.txt" || true
+          key="$(grep -E 'not ok|FAIL|[Ee]rror:|##\[error\]' "$RUNNER_TEMP/log.txt" | head -n 15 || true)"
           {
             echo "**Source:** \`ci\`"
             echo
             echo "The $RUN_NAME workflow failed on main at $RUN_SHA: $RUN_URL"
             echo
             echo '```'
-            gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed 2>&1 | tail -n 80 | cut -c1-300 || true
+            if [ -n "$key" ]; then echo "$key"; else tail -n 20 "$RUNNER_TEMP/log.txt"; fi
             echo '```'
+            echo
+            echo '<details><summary>Last 80 log lines</summary>'
+            echo
+            echo '```'
+            tail -n 80 "$RUNNER_TEMP/log.txt"
+            echo '```'
+            echo '</details>'
             echo
             echo "$marker"
           } > "$RUNNER_TEMP/body.md"

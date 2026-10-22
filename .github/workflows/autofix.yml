@@ -49,6 +49,7 @@ jobs:
           MAX_ATTEMPTS=3
           attempts="$(gh api "repos/$GITHUB_REPOSITORY/issues/$ISSUE/comments" --paginate \
             --jq '[.[] | select(.body | contains("<!-- autofix-outcome -->"))] | length' | awk '{s+=$1} END {print s+0}')"
+          echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
           if [ "$attempts" -ge "$MAX_ATTEMPTS" ]; then
             gh label create needs-human --repo "$GITHUB_REPOSITORY" --color 5319E7 --force >/dev/null
             gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --remove-label autofix-pr --remove-label autofix-failed >/dev/null 2>&1 || true
@@ -101,6 +102,28 @@ jobs:
             exit 0
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      # The channel's one "new incident" message. Posted here, after deduplication, and only on the first
+      # attempt, so duplicates, retries and closures never reach Slack. Never blocks the fix.
+      - name: Announce the incident in Slack
+        if: steps.check.outputs.proceed == 'true' && steps.check.outputs.attempts == '0'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ steps.check.outputs.issue }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -uo pipefail
+          [ -n "$SLACK_WEBHOOK_URL" ] || exit 0
+          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+          info="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body,labels)"
+          # `claude` requests are not incidents; their requester follows them on GitHub
+          printf '%s' "$info" | jq -e '[.labels[].name] | index("incident")' >/dev/null || exit 0
+          title="$(printf '%s' "$info" | jq -r .title | esc)"
+          source="$(printf '%s' "$info" | jq -r .body | sed -n 's/^\*\*Source:\*\* `\(.*\)`.*/\1/p' | head -n 1 | esc)"
+          text="New incident: <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE $title>"$'\n'"Source: ${source:-person}. Auto-fix is investigating."
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -fsS --max-time 15 --retry 3 -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null
 
   fix:
     needs: triage
@@ -397,6 +420,7 @@ jobs:
           DIR: ${{ runner.temp }}/autofix
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_MENTION: ${{ vars.SLACK_MENTION }}
+          SLACK_REVIEW_MENTION: ${{ vars.SLACK_REVIEW_MENTION }}
           SLACK_TOOLING_MENTION: ${{ vars.SLACK_TOOLING_MENTION }}
         run: |
           set -uo pipefail
@@ -414,7 +438,7 @@ jobs:
           case "$NOTIFY" in
             review)
               root="$(jq -r '.root_cause // empty' "$DIR/outcome.json" 2>/dev/null | esc)"
-              text="Review needed: <$PR_URL|draft PR> for $link"$'\n'"Root cause: ${root:-see the PR}" ;;
+              text="${SLACK_REVIEW_MENTION:+$SLACK_REVIEW_MENTION }Review needed: <$PR_URL|draft PR> for $link"$'\n'"Root cause: ${root:-see the PR}" ;;
             person)
               text="${SLACK_MENTION:+$SLACK_MENTION }Needs a person ($LABEL): $link"$'\n'"$(printf '%s' "$SUMMARY" | esc)" ;;
             tooling)
