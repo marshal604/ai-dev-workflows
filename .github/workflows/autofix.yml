@@ -155,7 +155,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --prefer-offline --no-audit --no-fund
 
       # Deterministic context for duplicate detection: open Auto-fix PRs and the files they touch
       - name: List open Auto-fix PRs
