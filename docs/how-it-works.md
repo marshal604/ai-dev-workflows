@@ -38,4 +38,5 @@ Tested on this repo's sample app (latent bugs, green CI): issue to verified draf
 - **Test evidence**: "fails without the fix" does not prove the failure is the reported bug; flaky tests can fake it. Edited existing tests are flagged, not blocked. Low test coverage means more `blocked` outcomes.
 - **Runs that never start** (platform outage, cancelled queue) leave no comment; the daily check of open issues covers them.
 - **Scope of testing**: one small TypeScript project; `fix` job limit 30 minutes, CI 10 minutes.
-- **Upstream workaround**: `claude.yml` pins `actions/checkout@v5` until a claude-code-action release fixes [#1721](https://github.com/anthropics/claude-code-action/issues/1721).
+- **Pinned actions**: every action is pinned to a commit SHA and upgraded only through the weekly Dependabot PR, after a 7-day cooldown, so upstream releases (Claude Code ships almost daily) never change behaviour unannounced.
+- **Upstream workaround**: `claude.yml` stays on checkout v5 until a claude-code-action release fixes [#1721](https://github.com/anthropics/claude-code-action/issues/1721).

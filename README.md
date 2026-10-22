@@ -20,6 +20,7 @@ To adopt this in another repository, follow **Adopt in a repository** below step
 | `.github/workflows/ci-incident.yml` | Opens an `incident` issue when CI fails on `main` and calls `autofix.yml`; closes it when `main` is green again |
 | `.github/workflows/daily-digest.yml` | Weekday Slack digest of work waiting on a person; doubles as a heartbeat |
 | `.github/workflows/ci.yml` | The project's CI; the required check and the safety net for every agent change |
+| `.github/dependabot.yml` | Weekly, grouped upgrade PR for the SHA-pinned actions, releases at least a week old |
 | `.github/ISSUE_TEMPLATE/incident.yml` | Issue form for bug reports Auto-fix can work from |
 | `CLAUDE.md` | **Template**: the sample project's conventions that review and fixes follow. Rewrite it for each project |
 | `src/`, `scripts/simulate-incident.ts` | Sample TypeScript app and a script that turns a real error into an `incident` issue |
@@ -30,9 +31,9 @@ Work through the steps in order. Each step ends with a check; do not start the n
 
 ### 1. Copy the files
 
-Copy `.github/workflows/`, `.github/ISSUE_TEMPLATE/incident.yml` and `CLAUDE.md` into the target repository.
+Copy `.github/workflows/`, `.github/dependabot.yml`, `.github/ISSUE_TEMPLATE/incident.yml` and `CLAUDE.md` into the target repository. Every action is pinned to a full commit SHA (version in the trailing comment), so nothing changes under you; upgrades arrive only as Dependabot PRs that go through CI and review. If the target repository already has a `dependabot.yml`, merge the `github-actions` entry into it.
 
-**Done when** all six workflow files and the issue form exist in the target repository.
+**Done when** all six workflow files, `dependabot.yml` and the issue form exist in the target repository.
 
 ### 2. Adapt the files to the project
 

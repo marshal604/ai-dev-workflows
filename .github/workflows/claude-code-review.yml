@@ -13,9 +13,11 @@ jobs:
   review:
     # Auto-fix opens draft PRs from autofix/* branches: review those too. Skip follow-up pushes made
     # by bots (e.g. @claude edits on a PR): re-reviewing an agent's own change mostly adds noise.
+    # Skip Dependabot: its runs get no repository secrets, and version bumps are checked by CI and a person.
     if: |
       (github.event.pull_request.draft == false || startsWith(github.head_ref, 'autofix/')) &&
-      !(endsWith(github.actor, '[bot]') && github.event.action == 'synchronize')
+      !(endsWith(github.actor, '[bot]') && github.event.action == 'synchronize') &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -24,13 +26,13 @@ jobs:
       issues: read
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           # The built-in /code-review reads the diff from local git; the PR merge commit's
           # first parent is the base branch, so depth 2 makes `git diff HEAD~1` the full PR diff
           fetch-depth: 2
 
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@aa8a7738e48bf30a40ee499ce818bef081c5ab5e # v1.0.257
         with:
           # Subscription token from `claude setup-token` (Pro / Max / Team / Enterprise)
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

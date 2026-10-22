@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Workflows pin every action to a commit SHA. Upgrades arrive here as one weekly PR, go through CI
+  # and review like any change, and only pick releases that have been out for a week.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      # claude.yml must stay on checkout v5 until anthropics/claude-code-action#1722 lands (see the comment there)
+      - dependency-name: actions/checkout
+        update-types: ["version-update:semver-major"]
