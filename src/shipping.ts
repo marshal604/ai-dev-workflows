@@ -35,7 +35,7 @@ export function shippingFeeCents(
     throw new RangeError("No shipping tiers configured");
   }
   const index = tierIndex(weightKg, tiers);
-  if (index < tiers.length) {
+  if (index <= tiers.length) {
     return tiers[index].feeCents;
   }
   const last = tiers[tiers.length - 1];
