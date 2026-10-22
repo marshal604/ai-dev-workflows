@@ -20,7 +20,7 @@
 | `.github/workflows/ci-incident.yml` | main 的 CI 失敗時開 `incident` issue，並呼叫 `autofix.yml`；main 恢復綠燈時關閉 |
 | `.github/workflows/daily-digest.yml` | 工作日的 Slack 摘要，列出等人處理的事項；同時當作心跳 |
 | `.github/workflows/ci.yml` | 專案的 CI；branch protection 的必要檢查，也是所有 AI 修改的安全網 |
-| `.github/dependabot.yml` | 每週一個合併的升級 PR，升級鎖定在 SHA 的 action，只選發布滿一週的版本 |
+| `.github/dependabot.yml` | 每週為鎖定在 SHA 的 action 開升級 PR（小版本和修補版合成一個，主版本各自一個），只選發布滿一週的版本 |
 | `.github/ISSUE_TEMPLATE/incident.yml` | Auto-fix 能處理的 bug 回報表單 |
 | `CLAUDE.md` | **範本**：範例專案的慣例，review 和修正會遵守。每個專案都要改寫 |
 | `src/`、`scripts/simulate-incident.ts` | 範例 TypeScript 程式，以及把真實錯誤轉成 `incident` issue 的腳本 |

@@ -9,8 +9,11 @@ updates:
     cooldown:
       default-days: 7
     groups:
+      # Minor and patch upgrades ride together; each major upgrade gets its own PR, so a breaking
+      # release never holds back the routine ones
       actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
       # claude.yml must stay on checkout v5 until anthropics/claude-code-action#1722 lands (see the comment there)
       - dependency-name: actions/checkout

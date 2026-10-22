@@ -20,7 +20,7 @@ To adopt this in another repository, follow **Adopt in a repository** below step
 | `.github/workflows/ci-incident.yml` | Opens an `incident` issue when CI fails on `main` and calls `autofix.yml`; closes it when `main` is green again |
 | `.github/workflows/daily-digest.yml` | Weekday Slack digest of work waiting on a person; doubles as a heartbeat |
 | `.github/workflows/ci.yml` | The project's CI; the required check and the safety net for every agent change |
-| `.github/dependabot.yml` | Weekly, grouped upgrade PR for the SHA-pinned actions, releases at least a week old |
+| `.github/dependabot.yml` | Weekly upgrade PRs for the SHA-pinned actions (minor and patch grouped, each major separate), releases at least a week old |
 | `.github/ISSUE_TEMPLATE/incident.yml` | Issue form for bug reports Auto-fix can work from |
 | `CLAUDE.md` | **Template**: the sample project's conventions that review and fixes follow. Rewrite it for each project |
 | `src/`, `scripts/simulate-incident.ts` | Sample TypeScript app and a script that turns a real error into an `incident` issue |
