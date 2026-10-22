@@ -175,3 +175,4 @@ Mechanics:
 - A CI issue closes itself when CI is green again on the current main, so the next break opens a fresh issue.
 - Each issue gets at most 3 Auto-fix attempts; after that it stays with a person.
 - To stop everything: `gh workflow disable autofix.yml` (likewise `ci-incident.yml`, `claude.yml`, `daily-digest.yml`), then cancel running runs. Uninstalling the Auto-fix App or deleting its private key stops all publishing at once.
+
