@@ -122,7 +122,36 @@ curl -X POST https://api.github.com/repos/<owner>/<repo>/issues \
   -d '{"title":"TypeError: ...","body":"發生了什麼、stack trace\n\n<!-- incident-fingerprint: <固定的識別碼> -->","labels":["incident"]}'
 ```
 
-fingerprint 註解會把同一個錯誤的重複告警歸到同一個 issue。`scripts/simulate-incident.ts` 會從真實錯誤產生這個請求。完成 [docs/how-it-works.md](docs/how-it-works.md#limits) 列出的執行環境強化後，才接上監控。
+fingerprint 註解用來標記同一個錯誤的重複告警。讓監控（或把它的 webhook 轉成這個請求的小轉接服務）先找有沒有相同 fingerprint 的未關閉 issue，有的話改成在上面留言，做法和 `ci-incident.yml` 一樣；否則每次重複都會開一張 issue 和一張 Slack 卡片，再被 Auto-fix 當成重複關掉。`scripts/simulate-incident.ts` 會從真實錯誤產生這個請求。完成 [docs/how-it-works.md](docs/how-it-works.md#limits) 列出的執行環境強化後，才接上監控。
+
+## Slack 通知
+
+分成兩層，都可以不裝：頻道顯示發生了什麼，只有需要人處理時才 tag 人。
+
+| 事件 | Slack | 誰處理 |
+|---|---|---|
+| 新的 incident | 一張卡片（GitHub app） | Auto-fix 自動開始 |
+| 重複、再次失敗、標籤變動、`@claude` 進度 | 不顯示 | workflow |
+| 開出 draft PR | 「Review needed」附根因和 PR 連結 | 人 review 後 merge |
+| `needs-human` / `autofix-failed` | 帶 `SLACK_MENTION` 的訊息 | 人 |
+
+服務中斷、金流、登入、資安和資料遺失，仍然走監控本身的告警和 on-call；Auto-fix 是並行的，不是取代。
+
+1. **知道發生了什麼（GitHub app）**：在 Slack 安裝 GitHub app，然後在頻道裡：
+   ```
+   /invite @GitHub
+   /github subscribe <owner>/<repo> issues +label:"incident"
+   /github unsubscribe <owner>/<repo> pulls commits releases deployments
+   ```
+   如果 GitHub 這端還沒裝「Slack」App，第一行會引導安裝，記得給它這個 repo 的權限。不要開 `comments`，否則每則 `@claude` 進度留言和討論都會推進來。
+2. **需要人處理（workflow）**：到 https://api.slack.com/apps 建一個 Slack app，開啟 Incoming Webhooks，替頻道新增 webhook，然後：
+   ```bash
+   gh secret set SLACK_WEBHOOK_URL --repo <owner>/<repo>      # 依提示貼上 webhook URL
+   gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!here>'   # 或用 '<!subteam^GROUP_ID>' tag 值班群組
+   ```
+   沒有設定這個 secret 時，這一步會自動跳過。
+
+**完成條件**：測試 incident 在頻道出現一張卡片，處理結果發出「Review needed」（或 `needs-human` 時 tag 人）。
 
 ## 日常運作
 

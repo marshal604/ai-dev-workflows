@@ -122,7 +122,36 @@ curl -X POST https://api.github.com/repos/<owner>/<repo>/issues \
   -d '{"title":"TypeError: ...","body":"What happened, stack trace\n\n<!-- incident-fingerprint: <stable id> -->","labels":["incident"]}'
 ```
 
-The fingerprint comment groups repeats of the same error into one issue. `scripts/simulate-incident.ts` builds exactly this request from a real error. Connect a monitor only after the execution-environment hardening listed in [docs/how-it-works.md](docs/how-it-works.md#limits).
+The fingerprint comment marks repeats of the same error. Have the monitor (or the small relay that turns its webhook into this request) first look for an open issue with the same fingerprint and comment on it instead, as `ci-incident.yml` does; otherwise every repeat opens an issue, and a Slack card, that Auto-fix then closes as a duplicate. `scripts/simulate-incident.ts` builds exactly this request from a real error. Connect a monitor only after the execution-environment hardening listed in [docs/how-it-works.md](docs/how-it-works.md#limits).
+
+## Slack notifications
+
+Two optional layers, so the channel shows what happened and pings people only when they must act:
+
+| Event | Slack | Who acts |
+|---|---|---|
+| New incident | One card (GitHub app) | Auto-fix starts by itself |
+| Duplicate, repeat failure, label change, `@claude` progress | Nothing | The workflow |
+| Draft PR opened | "Review needed" with root cause and PR link | A person reviews and merges |
+| `needs-human` / `autofix-failed` | Message with `SLACK_MENTION` | A person |
+
+Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
+
+1. **Awareness (GitHub app).** Install the GitHub app in Slack, then in the channel:
+   ```
+   /invite @GitHub
+   /github subscribe <owner>/<repo> issues +label:"incident"
+   /github unsubscribe <owner>/<repo> pulls commits releases deployments
+   ```
+   The first command asks to install the GitHub-side "Slack" App if missing; give it access to this repository. Leave the `comments` feature off: it would post every `@claude` progress comment and discussion.
+2. **Action needed (workflow).** Create a Slack app at https://api.slack.com/apps, turn on Incoming Webhooks, add a webhook for the channel, then:
+   ```bash
+   gh secret set SLACK_WEBHOOK_URL --repo <owner>/<repo>      # paste the webhook URL when prompted
+   gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!here>'   # or '<!subteam^GROUP_ID>' for an on-call group
+   ```
+   Without the secret the step is skipped.
+
+**Done when** a test incident shows one card, and its outcome posts "Review needed" (or a mention for `needs-human`).
 
 ## Day-to-day operation
 

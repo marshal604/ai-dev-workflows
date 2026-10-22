@@ -331,6 +331,8 @@ jobs:
           PR_URL: ${{ needs.publish.outputs.pr }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DIR: ${{ runner.temp }}/autofix
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MENTION: ${{ vars.SLACK_MENTION }}
         run: |
           set -uo pipefail
           field() { jq -r "$1 // empty" "$DIR/outcome.json" 2>/dev/null || true; }
@@ -339,7 +341,7 @@ jobs:
           case "$RESULT" in
             verified)
               if [ "$PUBLISH_JOB" = "success" ] && [ -n "$PR_URL" ]; then
-                label=autofix-pr; body="Auto-fix opened a draft PR: $PR_URL"
+                label=autofix-pr; body="Auto-fix opened a draft PR: $PR_URL"$'\n\n'"Root cause: $(field .root_cause)"
               else
                 label=autofix-failed; failed=true; body="Auto-fix verified a change but could not publish it. Run: $RUN_URL"
               fi ;;
@@ -365,4 +367,19 @@ jobs:
           gh issue edit "$ISSUE" --repo "$GITHUB_REPOSITORY" --add-label "$label" >/dev/null
           # The marker counts attempts for the runaway guard in triage
           gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "$body"$'\n\n<!-- autofix-outcome -->'
+          # Slack gets only the outcomes a person must act on. Optional: skipped when the secret is unset.
+          # ponytail: the runaway guard in triage does not notify; a person re-labeled the issue, so one is already on it
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+            title="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title --jq .title | esc)"
+            link="<$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|#$ISSUE $title>"
+            if [ "$label" = "autofix-pr" ]; then
+              text="Review needed: <$PR_URL|draft PR> for $link"$'\n'"Root cause: $(field .root_cause | esc)"
+            else
+              text="${SLACK_MENTION:+$SLACK_MENTION }Needs a person ($label): $link"$'\n'"$(printf '%s' "$body" | head -n 1 | esc)"
+            fi
+            jq -n --arg text "$text" '{text: $text}' \
+              | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null \
+              || echo "::warning::Slack notification failed"
+          fi
           [ "$failed" = "false" ]
