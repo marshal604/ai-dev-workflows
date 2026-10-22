@@ -22,6 +22,8 @@ Find the symptom, apply the fix. Every row was hit while building this repo; the
 | `autofix-failed`: "Changed files outside src/" | The fix needs files outside the allowed paths | Widen the path rule in the `Verify the change` step if that is intended |
 | `needs-human` with questions | The request is ambiguous | Answer in the issue comments, then remove and re-add the label |
 | Two PRs for one bug | Two signals for the same root cause arrived together | The later PR carries `possible-duplicate`; close one |
+| `autofix-failed`: "The agent returned no structured result"; the log shows `Failed to install Claude Code` with HTTP 429 | The Claude Code download was rate-limited (seen during a burst of runs on a release day) | Transient: re-label once it clears; the daily digest lists the failed run. `claude-code-action@v1` moves with every Claude Code release, so for fewer surprises pin it to a commit SHA and update deliberately (Dependabot) |
+| No daily digest on a weekday | Webhook dead (its installer left the workspace, or the channel was archived), or scheduled workflows disabled (GitHub turns them off after 60 days without repository activity) | Recreate the webhook from a shared account; re-enable `daily-digest.yml` in the Actions tab |
 | Agent changes nothing useful, run is green | Denied tool calls: the agent's command did not match `--allowedTools` (rules match by literal prefix) | Keep the allowlist prefixes broad (`Bash(git checkout:*)`, not `Bash(git checkout -b:*)`) |
 
 ## `@claude` and code review
