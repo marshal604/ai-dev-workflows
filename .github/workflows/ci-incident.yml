@@ -8,13 +8,16 @@ on:
     types: [completed]
     branches: [main]
 
-concurrency:
-  group: ci-incident
-  cancel-in-progress: false
-
+# Only intake and resolve share a lock, and both take seconds. A workflow-level lock also held the
+# Auto-fix call, so a recovery waited minutes behind the fix it made unnecessary.
+# ponytail: GitHub keeps one pending run per group, so a burst of three or more CI results on main
+# within seconds can drop a middle one; a reconciliation job that re-reads main's CI state fixes that.
 jobs:
   intake:
     if: github.event.workflow_run.conclusion == 'failure'
+    concurrency:
+      group: ci-incident
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -32,6 +35,8 @@ jobs:
           RUN_NAME: ${{ github.event.workflow_run.name }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          COMMIT_MSG: ${{ github.event.workflow_run.head_commit.message }}
+          PUSHER: ${{ github.event.workflow_run.actor.login }}
         run: |
           set -euo pipefail
           fingerprint="ci-$(printf '%s' "$RUN_NAME" | tr -c 'a-zA-Z0-9' '-')"
@@ -55,7 +60,10 @@ jobs:
           {
             echo "**Source:** \`ci\`"
             echo
-            echo "The $RUN_NAME workflow failed on main at $RUN_SHA: $RUN_URL"
+            # Read by the Slack announcement; the @mention notifies the pusher, who reverts first
+            echo "**Breaking commit:** ${RUN_SHA:0:7} \"$(printf '%s' "$COMMIT_MSG" | head -n 1 | cut -c1-100)\" pushed by @$PUSHER"
+            echo
+            echo "The $RUN_NAME workflow failed on main: $RUN_URL"
             echo
             echo '```'
             if [ -n "$key" ]; then echo "$key"; else tail -n 20 "$RUNNER_TEMP/log.txt"; fi
@@ -82,12 +90,17 @@ jobs:
   # manual fix would swallow the next, unrelated break as a "Failed again" comment.
   resolve:
     if: github.event.workflow_run.conclusion == 'success'
+    concurrency:
+      group: ci-incident
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      contents: read
       issues: write
+      pull-requests: write
     steps:
-      - name: Close the open CI issue
+      - name: Close the open CI issue and its Auto-fix PR
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_NAME: ${{ github.event.workflow_run.name }}
@@ -95,12 +108,19 @@ jobs:
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          # A green run for an older commit says nothing about the current main
-          [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" = "$RUN_SHA" ] || exit 0
+          # A green run for an older commit says nothing about the current main.
+          # Its own assignment, so an API failure fails the job instead of reading as "not current".
+          head="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+          [ "$head" = "$RUN_SHA" ] || exit 0
           fingerprint="ci-$(printf '%s' "$RUN_NAME" | tr -c 'a-zA-Z0-9' '-')"
           marker="<!-- incident-fingerprint: $fingerprint -->"
           for n in $(gh issue list --repo "$GITHUB_REPOSITORY" --label incident --state open --limit 200 \
             --json number,body --jq "map(select(.body | contains(\"$marker\"))) | .[].number"); do
+            # Main recovered without it (usually a revert), so its Auto-fix PR would only sit in the review queue
+            for pr in $(gh pr list --repo "$GITHUB_REPOSITORY" --state open --search "head:autofix/issue-$n" \
+              --json number,headRefName --jq ".[] | select(.headRefName | test(\"^autofix/issue-$n(-|\$)\")) | .number"); do
+              gh pr close "$pr" --repo "$GITHUB_REPOSITORY" --comment "Closed: main is green again at $RUN_SHA without this change."
+            done
             gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "CI is green again on main at $RUN_SHA: $RUN_URL"
           done
 

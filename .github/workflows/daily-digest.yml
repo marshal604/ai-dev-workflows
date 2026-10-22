@@ -1,0 +1,55 @@
+name: Daily Digest
+
+# Weekday morning summary for the duty owner: what waits on a person, and whether Auto-fix is failing.
+# It is also the heartbeat: if this message stops arriving, the Slack webhook or Actions is broken.
+on:
+  schedule:
+    - cron: '0 1 * * 1-5'   # 09:00 Asia/Taipei; GitHub may start scheduled runs a few minutes late
+  workflow_dispatch:
+
+permissions:
+  issues: read
+  pull-requests: read
+  actions: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Post the digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_MENTION: ${{ vars.SLACK_MENTION }}
+          SLACK_TOOLING_MENTION: ${{ vars.SLACK_TOOLING_MENTION }}
+        run: |
+          set -euo pipefail
+          [ -n "$SLACK_WEBHOOK_URL" ] || exit 0
+          repo="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          since="$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          # Same queries as the README's daily queue
+          unowned_q='is:open label:incident no:assignee -label:autofix-pr'
+          stale_q="is:open head:autofix/ created:<$since"
+          unowned="$(gh issue list --repo "$GITHUB_REPOSITORY" --search "$unowned_q" --limit 200 --json number --jq length)"
+          stale="$(gh pr list --repo "$GITHUB_REPOSITORY" --search "$stale_q" --limit 200 --json number --jq length)"
+          failed=0
+          for wf in autofix.yml ci-incident.yml; do
+            n="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --status failure --created ">=$since" \
+              --limit 100 --json databaseId --jq length)"
+            failed=$((failed + n))
+          done
+
+          enc() { jq -rn --arg q "$1" '$q | @uri'; }
+          text="Auto-fix daily digest for $GITHUB_REPOSITORY"
+          if [ "$unowned" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$failed" -eq 0 ]; then
+            text+=$'\n'"All clear."
+          else
+            [ "$((unowned + stale))" -gt 0 ] && text="${SLACK_MENTION:+$SLACK_MENTION }$text"
+            [ "$failed" -gt 0 ] && text="${SLACK_TOOLING_MENTION:+$SLACK_TOOLING_MENTION }$text"
+            text+=$'\n'"- <$repo/issues?q=$(enc "$unowned_q")|$unowned incident(s) with no owner and no PR>"
+            text+=$'\n'"- <$repo/pulls?q=$(enc "$stale_q")|$stale Auto-fix PR(s) open for over a day>"
+            text+=$'\n'"- <$repo/actions?query=$(enc 'is:failure')|$failed failed Auto-fix run(s) in the last 24h>"
+          fi
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -fsS --max-time 15 --retry 3 -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null

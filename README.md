@@ -17,7 +17,8 @@ To adopt this in another repository, follow **Adopt in a repository** below step
 | `.github/workflows/claude-code-review.yml` | AI review on PR open / update, inline comments |
 | `.github/workflows/claude.yml` | `@claude` in an issue or PR comment: conversational changes, pushes to the PR branch |
 | `.github/workflows/autofix.yml` | Auto-fix: triage → agent (read-only) → verify → publish draft PR → report |
-| `.github/workflows/ci-incident.yml` | Opens an `incident` issue when CI fails on `main` and calls `autofix.yml` |
+| `.github/workflows/ci-incident.yml` | Opens an `incident` issue when CI fails on `main` and calls `autofix.yml`; closes it when `main` is green again |
+| `.github/workflows/daily-digest.yml` | Weekday Slack digest of work waiting on a person; doubles as a heartbeat |
 | `.github/workflows/ci.yml` | The project's CI; the required check and the safety net for every agent change |
 | `.github/ISSUE_TEMPLATE/incident.yml` | Issue form for bug reports Auto-fix can work from |
 | `CLAUDE.md` | **Template**: the sample project's conventions that review and fixes follow. Rewrite it for each project |
@@ -31,7 +32,7 @@ Work through the steps in order. Each step ends with a check; do not start the n
 
 Copy `.github/workflows/`, `.github/ISSUE_TEMPLATE/incident.yml` and `CLAUDE.md` into the target repository.
 
-**Done when** all five workflow files and the issue form exist in the target repository.
+**Done when** all six workflow files and the issue form exist in the target repository.
 
 ### 2. Adapt the files to the project
 
@@ -128,40 +129,44 @@ The fingerprint comment marks repeats of the same error. Have the monitor (or th
 
 ## Slack notifications
 
-The workflows post to one Slack channel through an Incoming Webhook, and only at the moments that matter: a new incident, and the points where a person must act. Everything else stays on GitHub.
+The workflows post to one Slack channel through an Incoming Webhook, and only at the moments that matter: a new incident, the points where a person must act, and one digest each weekday morning. Everything else stays on GitHub.
 
 | Event | Slack | Who acts |
 |---|---|---|
-| New incident, after deduplication, first attempt only | "New incident" with source | Auto-fix starts by itself |
+| New incident, after deduplication, first attempt only | "New incident" with source; for CI, the breaking commit and "Revert first" | Auto-fix starts; for CI, the pusher reverts |
 | Repeat or duplicate of an open incident | Nothing | The workflow comments on the original |
-| Draft PR opened | `SLACK_REVIEW_MENTION` "Review needed" with root cause and PR link | `AUTOFIX_REVIEWERS` |
-| Incident blocked, unreproduced or rejected by verification | `SLACK_MENTION` "Needs a person" with the reason | The duty owner |
-| `claude` request (opened or blocked) | Nothing; GitHub notifies the requester | The requester |
-| Auto-fix itself failed (triage, publish, timeout, quota) | `SLACK_TOOLING_MENTION` "Auto-fix itself failed" with the run log | Whoever maintains these workflows |
+| Draft PR opened for an incident | "Review needed" with root cause and PR link, mentioning `SLACK_REVIEW_MENTION` (default `SLACK_MENTION`) | `AUTOFIX_REVIEWERS` |
+| Incident blocked, unreproduced or rejected by verification | "Needs a person" with the reason, mentioning `SLACK_MENTION` | The duty owner |
+| Incident closed before its outcome (main recovered, resolved by hand) | Nothing; a CI recovery also closes the incident's Auto-fix PR | |
+| `claude` request, whatever the outcome | Nothing; GitHub notifies the requester and requests review from `AUTOFIX_REVIEWERS` | The requester |
+| Auto-fix itself failed (triage, publish, timeout, quota) | "Auto-fix itself failed" with the run log, mentioning `SLACK_TOOLING_MENTION` | Whoever maintains these workflows |
+| Weekday 09:00 (Asia/Taipei; edit the cron in `daily-digest.yml`) | Digest: incidents with no owner and no PR, Auto-fix PRs open over a day, failed runs; "All clear" otherwise | The duty owner |
 | Closures, retries, label changes, `@claude` progress | Nothing | |
 
-Messages name `owner/repo#N`, so several repositories can share a channel; set the secret and variables at organization level (`gh secret set --org`, `gh variable set --org`). Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
+The digest doubles as a heartbeat: a weekday without it means the webhook or Actions is broken. Messages name `owner/repo#N`, so several repositories can share a channel; set the secret and variables at organization level (`gh secret set --org`, `gh variable set --org`), with repository-level overrides where teams rotate separately. Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
 
-Setup: create a Slack app at https://api.slack.com/apps (Blank app, bot scope `incoming-webhook`, no events), turn on **Incoming Webhooks**, add a webhook for the channel, then:
+Setup: create a Slack app at https://api.slack.com/apps (Blank app, bot scope `incoming-webhook`, no events), turn on **Incoming Webhooks**, add a webhook for the channel. Create it from a shared or service account: a webhook stops working when the person who installed it leaves. Then:
 ```bash
 gh secret set SLACK_WEBHOOK_URL --repo <owner>/<repo>    # run in your own terminal and paste the URL; never paste it into a chat
 gh variable set SLACK_MENTION --repo <owner>/<repo> --body '<!subteam^GROUP_ID>'          # duty group (paid Slack), or '<@MEMBER_ID>'
-gh variable set SLACK_REVIEW_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'          # usually the duty owner too
 gh variable set SLACK_TOOLING_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'         # the workflow maintainer
+gh variable set SLACK_REVIEW_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'          # optional; only if reviewers differ from the duty owner
+gh workflow run daily-digest.yml --repo <owner>/<repo>                                     # posts the first digest now
 ```
 A member ID comes from Slack: profile, **...**, **Copy member ID**. Unset mentions post without a ping; without the secret nothing is posted. A message that cannot be delivered after retries turns the outcome run red; a failed "New incident" post never blocks the fix.
 
 GitHub's own Slack app (`/github subscribe`) is not needed and is noisier: it posts a card for every labelled issue, duplicates included, and posts closures to the channel as well as the thread.
 
-**Done when** a test incident posts "New incident", then "Review needed" (or "Needs a person"), and a `claude` request posts nothing.
+**Done when** the manual digest run posts, a test incident posts "New incident" then "Review needed" (or "Needs a person"), and a `claude` request posts nothing.
 
 ## Day-to-day operation
 
 Team rules to agree on before the pilot:
 
-- **One duty owner per week.** Point `AUTOFIX_REVIEWERS` and `SLACK_MENTION` at them (or their team). They own every "Review needed" and "Needs a person" message, and acknowledge one by assigning themselves to the issue or PR.
-- **One daily queue check** by the duty owner: [unassigned issues that need a person](../../issues?q=is%3Aopen+label%3Aneeds-human%2Cautofix-failed+no%3Aassignee) and [open Auto-fix PRs](../../pulls?q=is%3Aopen+head%3Aautofix%2F). Slack is the nudge; this queue is the record.
-- **Broken main: revert first.** Revert the culprit PR to restore main; an Auto-fix PR is the follow-up, not the mitigation.
+- **One duty owner per week.** A handover changes two variables, `AUTOFIX_REVIEWERS` and `SLACK_MENTION` (or nothing, when both point at a rotating GitHub team and Slack user group). Review requests already sent stay with the previous owner, so hand open Auto-fix PRs over in person.
+- **Acknowledge by assigning yourself** to the issue or PR, and react to the Slack message with `:eyes:` (taking it) and `:white_check_mark:` (done), so the channel shows who has what.
+- **Work the daily queue** from the digest, or directly: [incidents with no owner and no PR](../../issues?q=is%3Aopen+label%3Aincident+no%3Aassignee+-label%3Aautofix-pr) (this includes incidents whose run never started or died) and [open Auto-fix PRs](../../pulls?q=is%3Aopen+head%3Aautofix%2F). Slack is the nudge; this queue is the record.
+- **Broken main: revert first.** Whoever pushed the breaking commit reverts it (the duty owner if they are unavailable); the Auto-fix PR is the follow-up, not the mitigation. When main goes green, the CI issue and its Auto-fix PR close themselves.
 
 Mechanics:
 
@@ -169,4 +174,4 @@ Mechanics:
 - To retry after answering a question in the comments, remove and re-add the `incident` / `claude` label (not `needs-human`).
 - A CI issue closes itself when CI is green again on the current main, so the next break opens a fresh issue.
 - Each issue gets at most 3 Auto-fix attempts; after that it stays with a person.
-- To stop everything: `gh workflow disable autofix.yml` (likewise `ci-incident.yml`, `claude.yml`), then cancel running runs. Uninstalling the Auto-fix App or deleting its private key stops all publishing at once.
+- To stop everything: `gh workflow disable autofix.yml` (likewise `ci-incident.yml`, `claude.yml`, `daily-digest.yml`), then cancel running runs. Uninstalling the Auto-fix App or deleting its private key stops all publishing at once.

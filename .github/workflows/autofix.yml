@@ -119,9 +119,17 @@ jobs:
           info="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body,labels)"
           # `claude` requests are not incidents; their requester follows them on GitHub
           printf '%s' "$info" | jq -e '[.labels[].name] | index("incident")' >/dev/null || exit 0
-          title="$(printf '%s' "$info" | jq -r .title | esc)"
-          source="$(printf '%s' "$info" | jq -r .body | sed -n 's/^\*\*Source:\*\* `\(.*\)`.*/\1/p' | head -n 1 | esc)"
-          text="New incident: <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE $title>"$'\n'"Source: ${source:-person}. Auto-fix is investigating."
+          title="$(printf '%s' "$info" | jq -r .title | cut -c1-150 | esc)"
+          body="$(printf '%s' "$info" | jq -r .body)"
+          source="$(printf '%s' "$body" | sed -n 's/^\*\*Source:\*\* `\(.*\)`.*/\1/p' | head -n 1 | esc)"
+          text="New incident: <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE> $title"$'\n'
+          if [ "$source" = "ci" ]; then
+            # Team rule: whoever pushed the breaking commit reverts it; the Auto-fix PR is the follow-up
+            commit="$(printf '%s' "$body" | sed -n 's/^\*\*Breaking commit:\*\* //p' | head -n 1 | cut -c1-200 | esc)"
+            text+="Main is broken. Revert first: ${commit:-see the issue}. Auto-fix is preparing a follow-up PR."
+          else
+            text+="Source: ${source:-person}. Auto-fix is investigating."
+          fi
           jq -n --arg text "$text" '{text: $text}' \
             | curl -fsS --max-time 15 --retry 3 -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null
 
@@ -426,21 +434,25 @@ jobs:
           set -uo pipefail
           [ -n "$SLACK_WEBHOOK_URL" ] || exit 0
           esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-          info="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,labels 2>/dev/null || true)"
-          title="$(printf '%s' "$info" | jq -r '.title // empty' 2>/dev/null | esc)"
-          # A blocked `claude` request belongs to its requester, who GitHub already notifies.
-          # Unknown labels (the lookup failed) count as an incident: better one extra ping than a silent miss.
-          if [ "$NOTIFY" = "person" ] && [ -n "$info" ] \
-            && ! printf '%s' "$info" | jq -e '[.labels[].name] | index("incident")' >/dev/null; then
-            exit 0
+          info="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,labels,state 2>/dev/null || true)"
+          title="$(printf '%s' "$info" | jq -r '.title // empty' 2>/dev/null | cut -c1-150 | esc || true)"
+          if [ "$NOTIFY" != "tooling" ] && [ -n "$info" ]; then
+            # Closed meanwhile (main recovered, or someone resolved it): nothing left to act on
+            [ "$(printf '%s' "$info" | jq -r .state)" = "CLOSED" ] && exit 0
+            # `claude` requests belong to their requester, whom GitHub notifies; Slack is for incidents.
+            # Unknown labels (the lookup failed) count as an incident: better one extra ping than a silent miss.
+            printf '%s' "$info" | jq -e '[.labels[].name] | index("incident")' >/dev/null || exit 0
           fi
-          link="<$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE${title:+ $title}>"
+          # Title outside the <url|text> link: a `|` in it would end the link text early
+          link="<$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE>${title:+ $title}"
           case "$NOTIFY" in
             review)
-              root="$(jq -r '.root_cause // empty' "$DIR/outcome.json" 2>/dev/null | esc)"
-              text="${SLACK_REVIEW_MENTION:+$SLACK_REVIEW_MENTION }Review needed: <$PR_URL|draft PR> for $link"$'\n'"Root cause: ${root:-see the PR}" ;;
+              # The review mention defaults to the duty owner, so a handover only changes SLACK_MENTION
+              mention="${SLACK_REVIEW_MENTION:-$SLACK_MENTION}"
+              root="$(jq -r '.root_cause // empty' "$DIR/outcome.json" 2>/dev/null | cut -c1-300 | esc || true)"
+              text="${mention:+$mention }Review needed: <$PR_URL|draft PR> for $link"$'\n'"Root cause: ${root:-see the PR}" ;;
             person)
-              text="${SLACK_MENTION:+$SLACK_MENTION }Needs a person ($LABEL): $link"$'\n'"$(printf '%s' "$SUMMARY" | esc)" ;;
+              text="${SLACK_MENTION:+$SLACK_MENTION }Needs a person ($LABEL): $link"$'\n'"$(printf '%s' "$SUMMARY" | cut -c1-300 | esc)" ;;
             tooling)
               text="${SLACK_TOOLING_MENTION:+$SLACK_TOOLING_MENTION }Auto-fix itself failed on $link"$'\n'"<$RUN_URL|Run log>" ;;
           esac
