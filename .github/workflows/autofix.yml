@@ -103,9 +103,11 @@ jobs:
           fi
           echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-      # The channel's one "new incident" message. Posted here, after deduplication, and only on the first
-      # attempt, so duplicates, retries and closures never reach Slack. Never blocks the fix.
-      - name: Announce the incident in Slack
+      # Only a broken main gets an opening message: it needs a revert now, while other incidents need no
+      # one until their outcome (Review needed / Needs a person / Auto-fix itself failed). Posted after
+      # deduplication and only on the first attempt, so duplicates and retries never reach Slack.
+      # Never blocks the fix.
+      - name: Announce a broken main in Slack
         if: steps.check.outputs.proceed == 'true' && steps.check.outputs.attempts == '0'
         continue-on-error: true
         env:
@@ -117,19 +119,14 @@ jobs:
           [ -n "$SLACK_WEBHOOK_URL" ] || exit 0
           esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
           info="$(gh issue view "$ISSUE" --repo "$GITHUB_REPOSITORY" --json title,body,labels)"
-          # `claude` requests are not incidents; their requester follows them on GitHub
           printf '%s' "$info" | jq -e '[.labels[].name] | index("incident")' >/dev/null || exit 0
-          title="$(printf '%s' "$info" | jq -r .title | cut -c1-150 | esc)"
           body="$(printf '%s' "$info" | jq -r .body)"
-          source="$(printf '%s' "$body" | sed -n 's/^\*\*Source:\*\* `\(.*\)`.*/\1/p' | head -n 1 | esc)"
-          text="New incident: <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE> $title"$'\n'
-          if [ "$source" = "ci" ]; then
-            # Team rule: whoever pushed the breaking commit reverts it; the Auto-fix PR is the follow-up
-            commit="$(printf '%s' "$body" | sed -n 's/^\*\*Breaking commit:\*\* //p' | head -n 1 | cut -c1-200 | esc)"
-            text+="Main is broken. Revert first: ${commit:-see the issue}. Auto-fix is preparing a follow-up PR."
-          else
-            text+="Source: ${source:-person}. Auto-fix is investigating."
-          fi
+          printf '%s' "$body" | grep -q '^\*\*Source:\*\* `ci`' || exit 0
+          title="$(printf '%s' "$info" | jq -r .title | cut -c1-150 | esc)"
+          # Team rule: whoever pushed the breaking commit reverts it; the Auto-fix PR is the follow-up
+          commit="$(printf '%s' "$body" | sed -n 's/^\*\*Breaking commit:\*\* //p' | head -n 1 | cut -c1-200 | esc)"
+          text="Main is broken: <$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/issues/$ISSUE|$GITHUB_REPOSITORY#$ISSUE> $title"$'\n'
+          text+="Revert first: ${commit:-see the issue}. Auto-fix is preparing a follow-up PR."
           jq -n --arg text "$text" '{text: $text}' \
             | curl -fsS --max-time 15 --retry 3 -X POST -H 'Content-Type: application/json' --data @- "$SLACK_WEBHOOK_URL" >/dev/null
 

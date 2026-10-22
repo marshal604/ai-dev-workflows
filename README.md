@@ -18,7 +18,7 @@ To adopt this in another repository, follow **Adopt in a repository** below step
 | `.github/workflows/claude.yml` | `@claude` in an issue or PR comment: conversational changes, pushes to the PR branch |
 | `.github/workflows/autofix.yml` | Auto-fix: triage → agent (read-only) → verify → publish draft PR → report |
 | `.github/workflows/ci-incident.yml` | Opens an `incident` issue when CI fails on `main` and calls `autofix.yml`; closes it when `main` is green again |
-| `.github/workflows/daily-digest.yml` | Weekday Slack digest of work waiting on a person; doubles as a heartbeat |
+| `.github/workflows/daily-digest.yml` | Weekday Slack digest of work waiting on a person; Monday's post doubles as a heartbeat |
 | `.github/workflows/ci.yml` | The project's CI; the required check and the safety net for every agent change |
 | `.github/dependabot.yml` | Weekly upgrade PRs for the SHA-pinned actions (minor and patch grouped, each major separate), releases at least a week old |
 | `.github/ISSUE_TEMPLATE/incident.yml` | Issue form for bug reports Auto-fix can work from |
@@ -130,21 +130,22 @@ The fingerprint comment marks repeats of the same error. Have the monitor (or th
 
 ## Slack notifications
 
-The workflows post to one Slack channel through an Incoming Webhook, and only at the moments that matter: a new incident, the points where a person must act, and one digest each weekday morning. Everything else stays on GitHub.
+The workflows post to one Slack channel through an Incoming Webhook, and only when a person must act: main is broken, a fix needs review, an incident needs a person, Auto-fix itself failed, or work is waiting in the morning digest. Everything else stays on GitHub.
 
 | Event | Slack | Who acts |
 |---|---|---|
-| New incident, after deduplication, first attempt only | "New incident" with source; for CI, the breaking commit and "Revert first" | Auto-fix starts; for CI, the pusher reverts |
+| CI breaks main (first attempt only) | "Main is broken" with the breaking commit and "Revert first" | The pusher reverts; Auto-fix prepares a follow-up PR |
+| Other incident starts | Nothing; its outcome message follows | Auto-fix |
 | Repeat or duplicate of an open incident | Nothing | The workflow comments on the original |
 | Draft PR opened for an incident | "Review needed" with root cause and PR link, mentioning `SLACK_REVIEW_MENTION` (default `SLACK_MENTION`) | `AUTOFIX_REVIEWERS` |
 | Incident blocked, unreproduced or rejected by verification | "Needs a person" with the reason, mentioning `SLACK_MENTION` | The duty owner |
 | Incident closed before its outcome (main recovered, resolved by hand) | Nothing; a CI recovery also closes the incident's Auto-fix PR | |
-| `claude` request, whatever the outcome | Nothing; GitHub notifies the requester and requests review from `AUTOFIX_REVIEWERS` | The requester |
+| `claude` request, unless Auto-fix itself failed | Nothing; GitHub notifies the requester and requests review from `AUTOFIX_REVIEWERS` | The requester |
 | Auto-fix itself failed (triage, publish, timeout, quota) | "Auto-fix itself failed" with the run log, mentioning `SLACK_TOOLING_MENTION` | Whoever maintains these workflows |
-| Weekday 09:00 (Asia/Taipei; edit the cron in `daily-digest.yml`) | Digest: incidents with no owner and no PR, Auto-fix PRs open over a day, failed runs; "All clear" otherwise | The duty owner |
+| Weekday 09:00 (Asia/Taipei; edit the cron in `daily-digest.yml`) | Digest: incidents with no owner and no PR, Auto-fix PRs open over a day, failed runs. Empty days post nothing, except "All clear" on Mondays | The duty owner |
 | Closures, retries, label changes, `@claude` progress | Nothing | |
 
-The digest doubles as a heartbeat: a weekday without it means the webhook or Actions is broken. Messages name `owner/repo#N`, so several repositories can share a channel; set the secret and variables at organization level (`gh secret set --org`, `gh variable set --org`), with repository-level overrides where teams rotate separately. Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
+Monday's "All clear" is the heartbeat: a Monday without a digest means the webhook or Actions is broken. A digest that cannot be delivered also turns its run red, and GitHub emails whoever last edited the cron. Messages name `owner/repo#N`, so several repositories can share a channel; set the secret and variables at organization level (`gh secret set --org`, `gh variable set --org`), with repository-level overrides where teams rotate separately. Outages, payments, auth, security and data loss still go to the monitor's own alerting and on-call; Auto-fix runs alongside it, not instead of it.
 
 Setup: create a Slack app at https://api.slack.com/apps (Blank app, bot scope `incoming-webhook`, no events), turn on **Incoming Webhooks**, add a webhook for the channel. Create it from a shared or service account: a webhook stops working when the person who installed it leaves. Then:
 ```bash
@@ -154,11 +155,11 @@ gh variable set SLACK_TOOLING_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>
 gh variable set SLACK_REVIEW_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'          # optional; only if reviewers differ from the duty owner
 gh workflow run daily-digest.yml --repo <owner>/<repo>                                     # posts the first digest now
 ```
-A member ID comes from Slack: profile, **...**, **Copy member ID**. Unset mentions post without a ping; without the secret nothing is posted. A message that cannot be delivered after retries turns the outcome run red; a failed "New incident" post never blocks the fix.
+A member ID comes from Slack: profile, **...**, **Copy member ID**. Unset mentions post without a ping; without the secret nothing is posted. A message that cannot be delivered after retries turns the outcome run red; a failed "Main is broken" post never blocks the fix.
 
 GitHub's own Slack app (`/github subscribe`) is not needed and is noisier: it posts a card for every labelled issue, duplicates included, and posts closures to the channel as well as the thread.
 
-**Done when** the manual digest run posts, a test incident posts "New incident" then "Review needed" (or "Needs a person"), and a `claude` request posts nothing.
+**Done when** the manual digest run posts, a test CI break posts "Main is broken", a test incident posts only "Review needed" (or "Needs a person"), and a `claude` request posts nothing.
 
 ## Day-to-day operation
 

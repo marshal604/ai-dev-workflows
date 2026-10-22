@@ -1,7 +1,8 @@
 name: Daily Digest
 
 # Weekday morning summary for the duty owner: what waits on a person, and whether Auto-fix is failing.
-# It is also the heartbeat: if this message stops arriving, the Slack webhook or Actions is broken.
+# Empty days post nothing, except Monday's "All clear", which proves the webhook still delivers.
+# A failed post turns the run red, and GitHub emails whoever last edited the cron.
 on:
   schedule:
     - cron: '0 1 * * 1-5'   # 09:00 Asia/Taipei; GitHub may start scheduled runs a few minutes late
@@ -43,6 +44,7 @@ jobs:
           enc() { jq -rn --arg q "$1" '$q | @uri'; }
           text="Auto-fix daily digest for $GITHUB_REPOSITORY"
           if [ "$unowned" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$failed" -eq 0 ]; then
+            [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ "$(date -u +%u)" = 1 ] || exit 0
             text+=$'\n'"All clear."
           else
             mentions=""

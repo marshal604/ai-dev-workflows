@@ -18,7 +18,7 @@
 | `.github/workflows/claude.yml` | issue 或 PR 留言 `@claude`：對話式修改，push 到 PR 分支 |
 | `.github/workflows/autofix.yml` | Auto-fix：前置檢查 → AI（唯讀）→ 驗證 → 開 draft PR → 回報 |
 | `.github/workflows/ci-incident.yml` | main 的 CI 失敗時開 `incident` issue，並呼叫 `autofix.yml`；main 恢復綠燈時關閉 |
-| `.github/workflows/daily-digest.yml` | 工作日的 Slack 摘要，列出等人處理的事項；同時當作心跳 |
+| `.github/workflows/daily-digest.yml` | 工作日的 Slack 摘要，列出等人處理的事項；週一那則同時當作心跳 |
 | `.github/workflows/ci.yml` | 專案的 CI；branch protection 的必要檢查，也是所有 AI 修改的安全網 |
 | `.github/dependabot.yml` | 每週為鎖定在 SHA 的 action 開升級 PR（小版本和修補版合成一個，主版本各自一個），只選發布滿一週的版本 |
 | `.github/ISSUE_TEMPLATE/incident.yml` | Auto-fix 能處理的 bug 回報表單 |
@@ -130,21 +130,22 @@ fingerprint 註解用來標記同一個錯誤的重複告警。讓監控（或�
 
 ## Slack 通知
 
-workflow 透過 Incoming Webhook 發到一個 Slack 頻道，只在重要的時刻發：出現新的 incident、需要人處理的時候，以及每個工作日早上一則摘要。其餘的都留在 GitHub。
+workflow 透過 Incoming Webhook 發到一個 Slack 頻道，只在需要人動手時發：main 壞了、修正要 review、incident 要交給人、Auto-fix 本身失敗，或早上的摘要裡有待辦。其餘的都留在 GitHub。
 
 | 事件 | Slack | 誰處理 |
 |---|---|---|
-| 新的 incident（去重之後，只在第一次處理時） | 「New incident」附來源；CI 的話附上造成問題的 commit 和「Revert first」 | Auto-fix 自動開始；CI 的話由推 commit 的人 revert |
+| CI 把 main 弄壞（只在第一次處理時） | 「Main is broken」附造成問題的 commit 和「Revert first」 | 推 commit 的人 revert；Auto-fix 準備後續 PR |
+| 其他 incident 開始處理 | 不顯示；之後會發結果訊息 | Auto-fix |
 | 已開立 incident 的重複或再次發生 | 不顯示 | workflow 在原本的 issue 留言 |
 | incident 開出 draft PR | 「Review needed」附根因和 PR 連結，tag `SLACK_REVIEW_MENTION`（預設為 `SLACK_MENTION`） | `AUTOFIX_REVIEWERS` |
 | incident 被擋住、無法重現或沒通過驗證 | 「Needs a person」附原因，tag `SLACK_MENTION` | 值班的人 |
 | incident 在有結果前就關閉（main 恢復、有人手動處理） | 不顯示；CI 恢復時也會關掉該 incident 的 Auto-fix PR | |
-| `claude` 需求（不論結果） | 不顯示；GitHub 會通知提出的人，並向 `AUTOFIX_REVIEWERS` 要求 review | 提出的人 |
+| `claude` 需求（Auto-fix 本身失敗除外） | 不顯示；GitHub 會通知提出的人，並向 `AUTOFIX_REVIEWERS` 要求 review | 提出的人 |
 | Auto-fix 本身失敗（triage、發佈、逾時、額度） | 「Auto-fix itself failed」附 run log，tag `SLACK_TOOLING_MENTION` | 維護這套 workflow 的人 |
-| 工作日 09:00（台北時間；可改 `daily-digest.yml` 的 cron） | 摘要：沒人接也沒 PR 的 incident、開超過一天的 Auto-fix PR、失敗的 run；都沒有就發「All clear」 | 值班的人 |
+| 工作日 09:00（台北時間；可改 `daily-digest.yml` 的 cron） | 摘要：沒人接也沒 PR 的 incident、開超過一天的 Auto-fix PR、失敗的 run。沒有待辦就不發，只有週一會發「All clear」 | 值班的人 |
 | 關閉、重試、標籤變動、`@claude` 進度 | 不顯示 | |
 
-摘要同時是心跳：工作日沒收到摘要，就代表 webhook 或 Actions 壞了。訊息會寫出 `owner/repo#N`，所以多個 repo 可以共用一個頻道；secret 和變數可以設在 org 層級（`gh secret set --org`、`gh variable set --org`），各團隊分開輪值時再用 repo 層級覆蓋。服務中斷、金流、登入、資安和資料遺失，仍然走監控本身的告警和 on-call；Auto-fix 是並行的，不是取代。
+週一的「All clear」就是心跳：週一沒收到摘要，就代表 webhook 或 Actions 壞了。摘要送不出去時 run 也會變紅，GitHub 會寄信給最後修改 cron 的人。訊息會寫出 `owner/repo#N`，所以多個 repo 可以共用一個頻道；secret 和變數可以設在 org 層級（`gh secret set --org`、`gh variable set --org`），各團隊分開輪值時再用 repo 層級覆蓋。服務中斷、金流、登入、資安和資料遺失，仍然走監控本身的告警和 on-call；Auto-fix 是並行的，不是取代。
 
 設定：到 https://api.slack.com/apps 建一個 Slack app（Blank app、bot scope 只要 `incoming-webhook`、不訂閱事件），開啟 **Incoming Webhooks**，替頻道新增 webhook。請用共用帳號或服務帳號建立：安裝的人離職時，webhook 會跟著失效。然後：
 ```bash
@@ -154,11 +155,11 @@ gh variable set SLACK_TOOLING_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>
 gh variable set SLACK_REVIEW_MENTION --repo <owner>/<repo> --body '<@MEMBER_ID>'          # 選填；reviewer 不是值班的人時才設
 gh workflow run daily-digest.yml --repo <owner>/<repo>                                     # 立刻發第一則摘要
 ```
-成員 ID 在 Slack 取得：個人檔案 → **⋯** → **複製成員 ID**。沒設定的 mention 會照發但不 tag 人；沒設定 secret 就什麼都不發。重試後仍送不出去，結果的 run 會變紅；「New incident」發送失敗則不會影響修復。
+成員 ID 在 Slack 取得：個人檔案 → **⋯** → **複製成員 ID**。沒設定的 mention 會照發但不 tag 人；沒設定 secret 就什麼都不發。重試後仍送不出去，結果的 run 會變紅；「Main is broken」發送失敗則不會影響修復。
 
 不需要 GitHub 官方的 Slack app（`/github subscribe`），而且它比較吵：每張有標籤的 issue 都會發卡片（重複的也算），關閉事件除了 thread 也會發到頻道。
 
-**完成條件**：手動觸發的摘要有發出；測試 incident 先發出「New incident」，接著發出「Review needed」（或「Needs a person」）；`claude` 需求什麼都不發。
+**完成條件**：手動觸發的摘要有發出；測試的 CI 失敗發出「Main is broken」；測試 incident 只發出「Review needed」（或「Needs a person」）；`claude` 需求什麼都不發。
 
 ## 日常運作
 
