@@ -48,7 +48,7 @@ jobs:
             mentions=""
             [ "$((unowned + stale))" -gt 0 ] && mentions="$SLACK_MENTION"
             # One ping when the duty owner also maintains the workflows
-            if [ "$failed" -gt 0 ] && [ "$SLACK_TOOLING_MENTION" != "$mentions" ]; then
+            if [ "$failed" -gt 0 ] && [ -n "$SLACK_TOOLING_MENTION" ] && [ "$SLACK_TOOLING_MENTION" != "$mentions" ]; then
               mentions="${mentions:+$mentions }$SLACK_TOOLING_MENTION"
             fi
             text="${mentions:+$mentions }$text"
