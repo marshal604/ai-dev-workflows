@@ -45,8 +45,13 @@ jobs:
           if [ "$unowned" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$failed" -eq 0 ]; then
             text+=$'\n'"All clear."
           else
-            [ "$((unowned + stale))" -gt 0 ] && text="${SLACK_MENTION:+$SLACK_MENTION }$text"
-            [ "$failed" -gt 0 ] && text="${SLACK_TOOLING_MENTION:+$SLACK_TOOLING_MENTION }$text"
+            mentions=""
+            [ "$((unowned + stale))" -gt 0 ] && mentions="$SLACK_MENTION"
+            # One ping when the duty owner also maintains the workflows
+            if [ "$failed" -gt 0 ] && [ "$SLACK_TOOLING_MENTION" != "$mentions" ]; then
+              mentions="${mentions:+$mentions }$SLACK_TOOLING_MENTION"
+            fi
+            text="${mentions:+$mentions }$text"
             text+=$'\n'"- <$repo/issues?q=$(enc "$unowned_q")|$unowned incident(s) with no owner and no PR>"
             text+=$'\n'"- <$repo/pulls?q=$(enc "$stale_q")|$stale Auto-fix PR(s) open for over a day>"
             text+=$'\n'"- <$repo/actions?query=$(enc 'is:failure')|$failed failed Auto-fix run(s) in the last 24h>"
