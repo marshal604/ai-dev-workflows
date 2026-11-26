@@ -167,7 +167,7 @@ jobs:
 
       - name: Investigate and edit
         id: claude
-        uses: anthropics/claude-code-action@aa8a7738e48bf30a40ee499ce818bef081c5ab5e # v1.0.257
+        uses: anthropics/claude-code-action@f431adaf77e0fecf918431e75a2b5b45b85af002 # v1.0.283
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The workflow's read-only token, so the agent never holds push rights
@@ -263,7 +263,7 @@ jobs:
     steps:
       # Own App token: pushes made with it trigger CI and review, unlike GITHUB_TOKEN
       - id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
           client-id: ${{ vars.AUTOFIX_APP_CLIENT_ID }}
           private-key: ${{ secrets.AUTOFIX_APP_PRIVATE_KEY }}
